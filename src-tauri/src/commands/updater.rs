@@ -2,13 +2,13 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
+use crate::env_helper;
 
 #[tauri::command]
 pub async fn open_url_in_browser(url: String) -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
-        let status = std::process::Command::new("open")
+        let status = env_helper::create_silent_command("open")
             .arg(&url)
             .status()
             .map_err(|e| format!("无法打开浏览器: {}", e))?;
@@ -17,7 +17,7 @@ pub async fn open_url_in_browser(url: String) -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
-        let status = std::process::Command::new("cmd")
+        let status = env_helper::create_silent_command("cmd")
             .args(["/c", "start", "", &url])
             .status()
             .map_err(|e| format!("无法打开浏览器: {}", e))?;
@@ -26,7 +26,7 @@ pub async fn open_url_in_browser(url: String) -> Result<bool, String> {
 
     #[cfg(target_os = "linux")]
     {
-        let status = std::process::Command::new("xdg-open")
+        let status = env_helper::create_silent_command("xdg-open")
             .arg(&url)
             .status()
             .map_err(|e| format!("无法打开浏览器: {}", e))?;
@@ -38,7 +38,7 @@ pub async fn open_url_in_browser(url: String) -> Result<bool, String> {
 pub async fn open_path_in_file_manager(path: String) -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
-        let status = std::process::Command::new("open")
+        let status = env_helper::create_silent_command("open")
             .args(["-R", &path])
             .status()
             .map_err(|e| format!("无法在访达中显示: {}", e))?;
@@ -47,7 +47,7 @@ pub async fn open_path_in_file_manager(path: String) -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
-        let status = std::process::Command::new("explorer")
+        let status = env_helper::create_silent_command("explorer")
             .args(["/select,", &path])
             .status()
             .map_err(|e| format!("无法在资源管理器中显示: {}", e))?;
@@ -56,7 +56,7 @@ pub async fn open_path_in_file_manager(path: String) -> Result<bool, String> {
 
     #[cfg(target_os = "linux")]
     {
-        let status = std::process::Command::new("xdg-open")
+        let status = env_helper::create_silent_command("xdg-open")
             .arg(&path)
             .status()
             .map_err(|e| format!("无法在文件管理器中显示: {}", e))?;
@@ -68,7 +68,7 @@ pub async fn open_path_in_file_manager(path: String) -> Result<bool, String> {
 pub async fn open_installer_file(path: String) -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
-        let status = std::process::Command::new("open")
+        let status = env_helper::create_silent_command("open")
             .arg(&path)
             .status()
             .map_err(|e| format!("无法打开安装包: {}", e))?;
@@ -77,7 +77,7 @@ pub async fn open_installer_file(path: String) -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
-        let status = std::process::Command::new("cmd")
+        let status = env_helper::create_silent_command("cmd")
             .args(["/c", "start", "", &path])
             .status()
             .map_err(|e| format!("无法打开安装包: {}", e))?;
@@ -86,7 +86,7 @@ pub async fn open_installer_file(path: String) -> Result<bool, String> {
 
     #[cfg(target_os = "linux")]
     {
-        let status = std::process::Command::new("xdg-open")
+        let status = env_helper::create_silent_command("xdg-open")
             .arg(&path)
             .status()
             .map_err(|e| format!("无法打开安装包: {}", e))?;
@@ -119,7 +119,7 @@ pub async fn download_and_install_update(
 
     let _ = app.emit("update-download-progress", 5);
 
-    let mut child = Command::new("curl")
+    let mut child = env_helper::create_silent_tokio_command("curl")
         .args([
             "-L",
             "-f",
@@ -171,19 +171,19 @@ pub async fn download_and_install_update(
     // Automatically trigger installation / open installer file
     #[cfg(target_os = "macos")]
     {
-        let _ = std::process::Command::new("open")
+        let _ = env_helper::create_silent_command("open")
             .arg(&target_str)
             .status();
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("cmd")
+        let _ = env_helper::create_silent_command("cmd")
             .args(["/c", "start", "", &target_str])
             .status();
     }
     #[cfg(target_os = "linux")]
     {
-        let _ = std::process::Command::new("xdg-open")
+        let _ = env_helper::create_silent_command("xdg-open")
             .arg(&target_str)
             .status();
     }

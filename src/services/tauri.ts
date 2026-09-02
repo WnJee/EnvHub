@@ -79,18 +79,23 @@ export const api = {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
         const { listen } = await import('@tauri-apps/api/event');
-        
-        const unlistenLog = await listen<string>('install-log', (event) => {
+
+        let unlistenLog: (() => void) | null = null;
+        let unlistenProgress: (() => void) | null = null;
+
+        unlistenLog = await listen<string>('install-log', (event) => {
           onLog(event.payload);
         });
-        const unlistenProgress = await listen<number>('install-progress', (event) => {
+        unlistenProgress = await listen<number>('install-progress', (event) => {
           onProgress(event.payload);
         });
 
-        const success = await invoke<boolean>('install_runtime_version', { toolId, version });
-        unlistenLog();
-        unlistenProgress();
-        return success;
+        try {
+          return await invoke<boolean>('install_runtime_version', { toolId, version });
+        } finally {
+          if (unlistenLog) unlistenLog();
+          if (unlistenProgress) unlistenProgress();
+        }
       } catch (err) {
         onLog(`[ERROR] 安装异常: ${err}`);
         return false;

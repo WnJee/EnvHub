@@ -1,7 +1,34 @@
 use std::env;
 use std::path::PathBuf;
 
-/// Fix and augment the PATH environment variable for GUI apps on macOS / Linux
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+pub const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Create a synchronous Command with hidden console window on Windows
+pub fn create_silent_command(program: &str) -> std::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// Create an asynchronous Tokio Command with hidden console window on Windows
+pub fn create_silent_tokio_command(program: &str) -> tokio::process::Command {
+    #[allow(unused_mut)]
+    let mut cmd = tokio::process::Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+/// Fix and augment the PATH environment variable for GUI apps on macOS / Windows / Linux
 pub fn fix_system_path() {
     let mut paths: Vec<PathBuf> = Vec::new();
 
@@ -19,6 +46,8 @@ pub fn fix_system_path() {
             home.join(".nvm/current/bin"),
             home.join(".proto/shims"),
             home.join(".proto/bin"),
+            home.join("scoop/shims"),
+            home.join("scoop/apps"),
         ];
 
         for up in user_paths {
@@ -28,7 +57,23 @@ pub fn fix_system_path() {
         }
     }
 
-    // 2. Standard UNIX / Homebrew / Language standard paths
+    // Windows specific AppData paths
+    if let Some(data_local) = dirs::data_local_dir() {
+        let win_user_paths = [
+            data_local.join("mise/shims"),
+            data_local.join("mise/bin"),
+            data_local.join("Programs/Python/Python312"),
+            data_local.join("Programs/Python/Python311"),
+            data_local.join("Microsoft/WinGet/Links"),
+        ];
+        for wp in win_user_paths {
+            if wp.exists() && !paths.contains(&wp) {
+                paths.push(wp);
+            }
+        }
+    }
+
+    // 2. Standard UNIX / Homebrew / Language / Windows Program Files standard paths
     let candidate_paths = [
         "/opt/homebrew/bin",
         "/opt/homebrew/sbin",
@@ -41,6 +86,11 @@ pub fn fix_system_path() {
         "/bin",
         "/usr/sbin",
         "/sbin",
+        "C:\\Program Files\\nodejs",
+        "C:\\Program Files\\Go\\bin",
+        "C:\\Program Files\\Git\\cmd",
+        "C:\\Program Files\\Docker\\Docker\\resources\\bin",
+        "C:\\ProgramData\\chocolatey\\bin",
     ];
 
     for p in candidate_paths {
@@ -70,8 +120,12 @@ pub fn find_mise_binary() -> Option<PathBuf> {
     if let Some(home) = dirs::home_dir() {
         let candidates = [
             home.join(".local/bin/mise"),
+            home.join(".local/bin/mise.exe"),
             home.join(".local/share/mise/bin/mise"),
+            home.join(".local/share/mise/bin/mise.exe"),
             home.join(".cargo/bin/mise"),
+            home.join(".cargo/bin/mise.exe"),
+            home.join("scoop/shims/mise.exe"),
         ];
         for c in candidates {
             if c.exists() {
@@ -80,24 +134,31 @@ pub fn find_mise_binary() -> Option<PathBuf> {
         }
     }
 
-    // 2. Check standard system locations
+    // 2. Check Windows LocalAppData locations
+    if let Some(data_local) = dirs::data_local_dir() {
+        let win_candidates = [
+            data_local.join("mise/bin/mise.exe"),
+            data_local.join("Microsoft/WinGet/Links/mise.exe"),
+        ];
+        for wc in win_candidates {
+            if wc.exists() {
+                return Some(wc);
+            }
+        }
+    }
+
+    // 3. Check standard system locations
     let sys_candidates = [
         PathBuf::from("/opt/homebrew/bin/mise"),
         PathBuf::from("/usr/local/bin/mise"),
         PathBuf::from("/usr/bin/mise"),
+        PathBuf::from("C:\\Program Files\\mise\\bin\\mise.exe"),
+        PathBuf::from("C:\\ProgramData\\chocolatey\\bin\\mise.exe"),
     ];
 
     for candidate in sys_candidates {
         if candidate.exists() {
             return Some(candidate);
-        }
-    }
-
-    // 3. Check Windows standard locations
-    if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
-        let win_path = PathBuf::from(local_app_data).join("mise\\bin\\mise.exe");
-        if win_path.exists() {
-            return Some(win_path);
         }
     }
 

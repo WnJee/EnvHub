@@ -194,18 +194,36 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
         ],
     });
 
-    // 6. Homebrew (macOS)
-    configs.push(MirrorConfig {
-        id: "brew".to_string(),
-        name: "Homebrew (macOS)".to_string(),
-        tool: "brew".to_string(),
-        current_mirror: "https://mirrors.ustc.edu.cn/homebrew-bottles".to_string(),
-        options: vec![
-            MirrorOption { name: "中国科学技术大学 USTC 镜像".to_string(), url: "https://mirrors.ustc.edu.cn/homebrew-bottles".to_string(), ping: None, is_default: Some(true) },
-            MirrorOption { name: "清华大学 TUNA 镜像".to_string(), url: "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "阿里云 Homebrew 镜像".to_string(), url: "https://mirrors.aliyun.com/homebrew/homebrew-bottles".to_string(), ping: None, is_default: None },
-        ],
-    });
+    // 6. Homebrew (macOS / Linux only) or NuGet (.NET Windows)
+    #[cfg(not(target_os = "windows"))]
+    {
+        configs.push(MirrorConfig {
+            id: "brew".to_string(),
+            name: "Homebrew (macOS)".to_string(),
+            tool: "brew".to_string(),
+            current_mirror: "https://mirrors.ustc.edu.cn/homebrew-bottles".to_string(),
+            options: vec![
+                MirrorOption { name: "中国科学技术大学 USTC 镜像".to_string(), url: "https://mirrors.ustc.edu.cn/homebrew-bottles".to_string(), ping: None, is_default: Some(true) },
+                MirrorOption { name: "清华大学 TUNA 镜像".to_string(), url: "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles".to_string(), ping: None, is_default: None },
+                MirrorOption { name: "阿里云 Homebrew 镜像".to_string(), url: "https://mirrors.aliyun.com/homebrew/homebrew-bottles".to_string(), ping: None, is_default: None },
+            ],
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        configs.push(MirrorConfig {
+            id: "nuget".to_string(),
+            name: "NuGet (.NET Windows)".to_string(),
+            tool: "nuget".to_string(),
+            current_mirror: "https://nuget.cdn.azure.cn/v3/index.json".to_string(),
+            options: vec![
+                MirrorOption { name: "Azure 中国 CDN 镜像 (推荐)".to_string(), url: "https://nuget.cdn.azure.cn/v3/index.json".to_string(), ping: None, is_default: Some(true) },
+                MirrorOption { name: "华为云 NuGet 镜像".to_string(), url: "https://repo.huaweicloud.com/repository/nuget/v3/index.json".to_string(), ping: None, is_default: None },
+                MirrorOption { name: "NuGet.org 官方源".to_string(), url: "https://api.nuget.org/v3/index.json".to_string(), ping: None, is_default: None },
+            ],
+        });
+    }
 
     // 7. Maven (Java)
     let mut maven_current = "https://repo.maven.apache.org/maven2".to_string();
@@ -286,10 +304,6 @@ pub async fn set_mirror(tool: String, mirror_url: String) -> Result<bool, String
             fs::write(npmrc, lines.join("\n") + "\n").map_err(|e| format!("写入 ~/.npmrc 失败: {}", e))?;
         }
         "pip" => {
-            let pip_dir = home.join(".pip");
-            let _ = fs::create_dir_all(&pip_dir);
-            let pip_conf = pip_dir.join("pip.conf");
-            
             let host = mirror_url
                 .trim_start_matches("https://")
                 .trim_start_matches("http://")
@@ -298,10 +312,25 @@ pub async fn set_mirror(tool: String, mirror_url: String) -> Result<bool, String
                 .unwrap_or("pypi.tuna.tsinghua.edu.cn");
 
             let content = format!("[global]\nindex-url = {}\ntrusted-host = {}\n", mirror_url, host);
-            fs::write(pip_conf, content).map_err(|e| format!("写入 pip.conf 失败: {}", e))?;
+
+            // 1. User home .pip/pip.conf
+            let pip_dir = home.join(".pip");
+            let _ = fs::create_dir_all(&pip_dir);
+            let _ = fs::write(pip_dir.join("pip.conf"), &content);
+
+            // 2. Windows pip/pip.ini
+            let win_pip_dir = home.join("pip");
+            let _ = fs::create_dir_all(&win_pip_dir);
+            let _ = fs::write(win_pip_dir.join("pip.ini"), &content);
+
+            if let Some(config_dir) = dirs::config_dir() {
+                let appdata_pip = config_dir.join("pip");
+                let _ = fs::create_dir_all(&appdata_pip);
+                let _ = fs::write(appdata_pip.join("pip.ini"), &content);
+            }
         }
         "go" => {
-            let status = std::process::Command::new("go")
+            let status = crate::env_helper::create_silent_command("go")
                 .args(["env", "-w", &format!("GOPROXY={}", mirror_url)])
                 .status()
                 .map_err(|e| format!("执行 go env -w 失败: {}", e))?;
@@ -346,7 +375,7 @@ replace-with = 'crates-io'
                 "registry-mirrors": [mirror_url]
             });
             let content = serde_json::to_string_pretty(&val).unwrap_or_default();
-            fs::write(docker_cfg, content).map_err(|e| format!("写入 ~/.docker/daemon.json 失败: {}", e))?;
+            fs::write(docker_cfg, content).map_err(|e| format!("写入 daemon.json 失败: {}", e))?;
         }
         "maven" => {
             let m2_dir = home.join(".m2");
@@ -366,15 +395,20 @@ replace-with = 'crates-io'
     </mirror>
   </mirrors>
 </settings>"#, mirror_url);
-            fs::write(settings_file, xml_content).map_err(|e| format!("写入 ~/.m2/settings.xml 失败: {}", e))?;
+            fs::write(settings_file, xml_content).map_err(|e| format!("写入 settings.xml 失败: {}", e))?;
+        }
+        "nuget" => {
+            let _ = crate::env_helper::create_silent_command("dotnet")
+                .args(["nuget", "add", "source", &mirror_url, "-n", "EnvHub-Mirror"])
+                .status();
         }
         "composer" => {
-            let _ = std::process::Command::new("composer")
+            let _ = crate::env_helper::create_silent_command("composer")
                 .args(["config", "-g", "repos.packagist", "composer", &mirror_url])
                 .status();
         }
         "rubygems" => {
-            let _ = std::process::Command::new("gem")
+            let _ = crate::env_helper::create_silent_command("gem")
                 .args(["sources", "--add", &mirror_url])
                 .status();
         }

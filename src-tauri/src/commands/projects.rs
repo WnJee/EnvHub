@@ -22,6 +22,9 @@ pub struct ProjectEnv {
 }
 
 fn get_projects_config_path() -> Option<PathBuf> {
+    if let Some(cfg) = dirs::config_dir() {
+        return Some(cfg.join("envhub/projects.json"));
+    }
     dirs::home_dir().map(|h| h.join(".config/envhub/projects.json"))
 }
 
@@ -257,7 +260,7 @@ pub async fn set_project_tool_version(project_path: String, tool_id: String, ver
 pub async fn open_in_editor(path: String) -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
-        let status = std::process::Command::new("open")
+        let status = crate::env_helper::create_silent_command("open")
             .args(["-a", "Visual Studio Code", &path])
             .status()
             .map_err(|e| format!("打开 VS Code 失败: {}", e))?;
@@ -266,8 +269,8 @@ pub async fn open_in_editor(path: String) -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
-        let status = std::process::Command::new("cmd")
-            .args(["/c", "code", &path])
+        let status = crate::env_helper::create_silent_command("cmd")
+            .args(["/c", "start", "code", &path])
             .status()
             .map_err(|e| format!("打开 VS Code 失败: {}", e))?;
         return Ok(status.success());
@@ -275,7 +278,7 @@ pub async fn open_in_editor(path: String) -> Result<bool, String> {
 
     #[cfg(target_os = "linux")]
     {
-        let status = std::process::Command::new("code")
+        let status = crate::env_helper::create_silent_command("code")
             .arg(&path)
             .status()
             .map_err(|e| format!("打开 VS Code 失败: {}", e))?;
@@ -287,7 +290,7 @@ pub async fn open_in_editor(path: String) -> Result<bool, String> {
 pub async fn open_in_terminal(path: String) -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
-        let status = std::process::Command::new("open")
+        let status = crate::env_helper::create_silent_command("open")
             .args(["-a", "Terminal", &path])
             .status()
             .map_err(|e| format!("打开终端失败: {}", e))?;
@@ -296,16 +299,20 @@ pub async fn open_in_terminal(path: String) -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
-        let status = std::process::Command::new("cmd")
+        let wt_res = crate::env_helper::create_silent_command("cmd")
             .args(["/c", "start", "wt", "-d", &path])
-            .status()
-            .map_err(|e| format!("打开终端失败: {}", e))?;
-        return Ok(status.success());
+            .status();
+        if wt_res.is_err() || !wt_res.unwrap().success() {
+            let _ = crate::env_helper::create_silent_command("cmd")
+                .args(["/c", "start", "powershell", "-NoExit", "-Command", &format!("Set-Location -Path '{}'", path)])
+                .status();
+        }
+        return Ok(true);
     }
 
     #[cfg(target_os = "linux")]
     {
-        let status = std::process::Command::new("x-terminal-emulator")
+        let status = crate::env_helper::create_silent_command("x-terminal-emulator")
             .args(["--working-directory", &path])
             .status()
             .map_err(|e| format!("打开终端失败: {}", e))?;

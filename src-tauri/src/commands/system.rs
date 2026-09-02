@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use tokio::process::Command;
 use crate::env_helper;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -70,12 +69,17 @@ pub async fn get_system_status() -> Result<SystemStatus, String> {
     let mut os_version = format!("{} ({})", os_name, arch);
     #[cfg(target_os = "macos")]
     {
-        if let Ok(out) = std::process::Command::new("sw_vers").arg("-productVersion").output() {
+        if let Ok(out) = env_helper::create_silent_command("sw_vers").arg("-productVersion").output() {
             if out.status.success() {
                 let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 os_version = format!("macOS {}", v);
             }
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        os_version = "Windows (x64/ARM64)".to_string();
     }
 
     let mise_bin = env_helper::find_mise_binary();
@@ -84,7 +88,7 @@ pub async fn get_system_status() -> Result<SystemStatus, String> {
 
     let mut mise_version = None;
     if let Some(ref bin) = mise_bin {
-        if let Ok(out) = std::process::Command::new(bin).arg("--version").output() {
+        if let Ok(out) = env_helper::create_silent_command(&bin.to_string_lossy()).arg("--version").output() {
             if out.status.success() {
                 mise_version = Some(String::from_utf8_lossy(&out.stdout).trim().to_string());
             }
@@ -92,13 +96,19 @@ pub async fn get_system_status() -> Result<SystemStatus, String> {
     }
 
     let pkg_manager = if cfg!(target_os = "macos") {
-        if std::process::Command::new("brew").arg("--version").output().is_ok() {
+        if env_helper::create_silent_command("brew").arg("--version").output().is_ok() {
             "brew"
         } else {
             "none"
         }
     } else if cfg!(target_os = "windows") {
-        "winget"
+        if env_helper::create_silent_command("winget").arg("--version").output().is_ok() {
+            "winget"
+        } else if env_helper::create_silent_command("scoop").arg("--version").output().is_ok() {
+            "scoop"
+        } else {
+            "winget"
+        }
     } else {
         "apt"
     };
@@ -355,7 +365,7 @@ fn probe_tool_version(tool_id: &str) -> Option<String> {
         _ => (tool_id, &["--version"]),
     };
 
-    if let Ok(out) = std::process::Command::new(cmd).args(args).output() {
+    if let Ok(out) = env_helper::create_silent_command(cmd).args(args).output() {
         if out.status.success() || (!out.stderr.is_empty() && tool_id == "nginx") {
             let stdout_str = String::from_utf8_lossy(&out.stdout);
             let stderr_str = String::from_utf8_lossy(&out.stderr);
@@ -376,7 +386,7 @@ fn probe_tool_version(tool_id: &str) -> Option<String> {
 
     // Fallbacks
     if tool_id == "docker-compose" {
-        if let Ok(out) = std::process::Command::new("docker").args(["compose", "version"]).output() {
+        if let Ok(out) = env_helper::create_silent_command("docker").args(["compose", "version"]).output() {
             if out.status.success() {
                 let raw = String::from_utf8_lossy(&out.stdout);
                 for word in raw.split_whitespace() {
@@ -389,13 +399,13 @@ fn probe_tool_version(tool_id: &str) -> Option<String> {
             }
         }
     } else if tool_id == "mongodb" {
-        if let Ok(out) = std::process::Command::new("mongosh").args(["--version"]).output() {
+        if let Ok(out) = env_helper::create_silent_command("mongosh").args(["--version"]).output() {
             if out.status.success() {
                 return Some(String::from_utf8_lossy(&out.stdout).trim().to_string());
             }
         }
     } else if tool_id == "redis" {
-        if let Ok(out) = std::process::Command::new("redis-cli").args(["--version"]).output() {
+        if let Ok(out) = env_helper::create_silent_command("redis-cli").args(["--version"]).output() {
             if out.status.success() {
                 let raw = String::from_utf8_lossy(&out.stdout);
                 for word in raw.split_whitespace() {
@@ -415,7 +425,7 @@ fn probe_tool_version(tool_id: &str) -> Option<String> {
 #[tauri::command]
 pub async fn test_system_tool(tool_id: String) -> Result<String, String> {
     let binary_name = if tool_id == "neovim" { "nvim" } else if tool_id == "ripgrep" { "rg" } else { &tool_id };
-    let output = std::process::Command::new(binary_name)
+    let output = env_helper::create_silent_command(binary_name)
         .arg("--version")
         .output()
         .map_err(|e| format!("无法执行 {}: {}", binary_name, e))?;
@@ -431,30 +441,52 @@ pub async fn test_system_tool(tool_id: String) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn install_system_tool(tool_id: String) -> Result<bool, String> {
-    let cmd = if cfg!(target_os = "macos") {
-        if tool_id == "docker" {
+    #[cfg(target_os = "macos")]
+    {
+        let cmd = if tool_id == "docker" {
             "brew install --cask docker".to_string()
         } else {
             format!("brew install {}", tool_id)
+        };
+        let status = env_helper::create_silent_tokio_command("sh")
+            .args(["-c", &cmd])
+            .status()
+            .await
+            .map_err(|e| format!("调用 Homebrew 失败: {}", e))?;
+
+        if !status.success() {
+            return Err(format!("Homebrew 执行失败，退出码: {:?}", status.code()));
         }
-    } else if cfg!(target_os = "windows") {
-        format!("winget install {}", tool_id)
-    } else {
-        format!("sudo apt install -y {}", tool_id)
-    };
-
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(&cmd)
-        .status()
-        .await
-        .map_err(|e| format!("调用系统包管理器失败: {}", e))?;
-
-    if !status.success() {
-        return Err(format!("包管理器执行失败，退出码: {:?}", status.code()));
+        return Ok(true);
     }
 
-    Ok(true)
+    #[cfg(target_os = "windows")]
+    {
+        let status = env_helper::create_silent_tokio_command("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &format!("winget install --accept-source-agreements --accept-package-agreements {}", tool_id)])
+            .status()
+            .await
+            .map_err(|e| format!("调用 Winget 失败: {}", e))?;
+
+        if !status.success() {
+            return Err(format!("Winget 执行失败，退出码: {:?}", status.code()));
+        }
+        return Ok(true);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let status = env_helper::create_silent_tokio_command("sh")
+            .args(["-c", &format!("sudo apt install -y {}", tool_id)])
+            .status()
+            .await
+            .map_err(|e| format!("调用 apt 失败: {}", e))?;
+
+        if !status.success() {
+            return Err(format!("apt 执行失败，退出码: {:?}", status.code()));
+        }
+        return Ok(true);
+    }
 }
 
 #[tauri::command]
@@ -463,34 +495,28 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
     env_helper::fix_system_path();
 
     let mut checks = Vec::new();
-    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-    let mut rc_file = "~/.zshrc";
+    let shell = env::var("SHELL").unwrap_or_else(|_| {
+        if cfg!(windows) { "PowerShell".to_string() } else { "/bin/zsh".to_string() }
+    });
+    let mut rc_file = if cfg!(windows) { "PowerShell Profile ($PROFILE)".to_string() } else { "~/.zshrc".to_string() };
     let mut has_activation = false;
 
     if let Some(home) = dirs::home_dir() {
         let zshrc = home.join(".zshrc");
         let zprofile = home.join(".zprofile");
         let bashrc = home.join(".bashrc");
+        let ps_profile1 = home.join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1");
+        let ps_profile2 = home.join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1");
 
-        let target_rc = if shell.ends_with("bash") {
-            rc_file = "~/.bashrc";
-            bashrc
-        } else {
-            rc_file = "~/.zshrc";
-            zshrc
-        };
-
-        if target_rc.exists() {
-            if let Ok(content) = fs::read_to_string(&target_rc) {
-                if content.contains("mise activate") || content.contains("rtx activate") {
-                    has_activation = true;
-                }
-            }
-        }
-        if !has_activation && zprofile.exists() {
-            if let Ok(content) = fs::read_to_string(&zprofile) {
-                if content.contains("mise activate") || content.contains("rtx activate") {
-                    has_activation = true;
+        let check_files = [&zshrc, &zprofile, &bashrc, &ps_profile1, &ps_profile2];
+        for f in check_files {
+            if f.exists() {
+                if let Ok(content) = fs::read_to_string(f) {
+                    if content.contains("mise activate") || content.contains("rtx activate") {
+                        has_activation = true;
+                        rc_file = f.file_name().and_then(|n| n.to_str()).unwrap_or("profile").to_string();
+                        break;
+                    }
                 }
             }
         }
@@ -503,26 +529,27 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
         message: if has_activation {
             format!("已在 {} 中检测到 mise activate，命令行环境同步正常", rc_file)
         } else {
-            format!("未在 {} 中配置 mise activate，命令行终端可能无法自动切换版本", rc_file)
+            format!("未在终端 Profile 中配置 mise activate，命令行可能无法自动切换版本", )
         },
         shell: shell.clone(),
-        config_file: rc_file.to_string(),
+        config_file: rc_file.clone(),
         can_auto_fix: !has_activation,
     });
 
     // 2. PATH priority check
     let path = env::var("PATH").unwrap_or_default();
-    let has_shims_in_path = path.contains(".local/share/mise/shims") || path.contains("mise/shims");
+    let has_shims_in_path = path.contains(".local/share/mise/shims") || path.contains("mise/shims") || path.contains("mise\\shims");
 
     let mut has_shims_configured = has_shims_in_path || has_activation;
     if let Some(home) = dirs::home_dir() {
         let zshrc = home.join(".zshrc");
         let zprofile = home.join(".zprofile");
         let bashrc = home.join(".bashrc");
-        for rc in [&zshrc, &zprofile, &bashrc] {
+        let ps_profile = home.join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1");
+        for rc in [&zshrc, &zprofile, &bashrc, &ps_profile] {
             if rc.exists() {
                 if let Ok(content) = fs::read_to_string(rc) {
-                    if content.contains("mise/shims") || content.contains("mise activate") {
+                    if content.contains("mise/shims") || content.contains("mise\\shims") || content.contains("mise activate") {
                         has_shims_configured = true;
                         break;
                     }
@@ -546,17 +573,20 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
     });
 
     // 3. Package Manager
-    let has_brew = std::process::Command::new("brew").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
+    let pkg_mgr_ok = if cfg!(target_os = "windows") {
+        env_helper::create_silent_command("winget").arg("--version").output().is_ok()
+    } else {
+        env_helper::create_silent_command("brew").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+    };
+
     checks.push(EnvHealthCheck {
         id: "package-manager".to_string(),
         title: "系统包管理器状态".to_string(),
-        status: if has_brew || cfg!(target_os = "windows") { "ok".to_string() } else { "warning".to_string() },
-        message: if has_brew {
-            "Homebrew 处于就绪状态，支持自动安装底层 CLI 依赖".to_string()
-        } else if cfg!(target_os = "windows") {
-            "Winget 处于就绪状态".to_string()
+        status: if pkg_mgr_ok { "ok".to_string() } else { "warning".to_string() },
+        message: if cfg!(target_os = "windows") {
+            if pkg_mgr_ok { "Windows Winget 包管理器处于就绪状态".to_string() } else { "未检测到 Winget 包管理器".to_string() }
         } else {
-            "未检测到 Homebrew，部分系统工具需要手动编译安装".to_string()
+            if pkg_mgr_ok { "Homebrew 处于就绪状态，支持自动安装底层 CLI 依赖".to_string() } else { "未检测到 Homebrew，部分系统工具需要手动编译安装".to_string() }
         },
         shell: "system".to_string(),
         config_file: "system".to_string(),
@@ -569,60 +599,78 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
 #[tauri::command]
 pub async fn auto_fix_health_check(_check_id: String) -> Result<bool, String> {
     if let Some(home) = dirs::home_dir() {
-        let shell = env::var("SHELL").unwrap_or_default();
-        let rc_path = if shell.ends_with("bash") {
-            home.join(".bashrc")
-        } else {
-            home.join(".zshrc")
-        };
-        let zprofile_path = home.join(".zprofile");
-
-        // Ensure shims directory exists
-        let shims_dir = home.join(".local/share/mise/shims");
-        let _ = fs::create_dir_all(&shims_dir);
-
-        let mut fix_lines = Vec::new();
-        let existing_rc = fs::read_to_string(&rc_path).unwrap_or_default();
-
-        if !existing_rc.contains("mise/shims") {
-            fix_lines.push("\n# Mise Shims PATH\nexport PATH=\"$HOME/.local/share/mise/shims:$PATH\"\n");
-        }
-
-        if !existing_rc.contains("mise activate") && !existing_rc.contains("rtx activate") {
-            if shell.ends_with("bash") {
-                fix_lines.push("# Mise Version Manager Hook\neval \"$(mise activate bash)\"\n");
-            } else {
-                fix_lines.push("# Mise Version Manager Hook\neval \"$(mise activate zsh)\"\n");
-            }
-        }
-
-        if !fix_lines.is_empty() {
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&rc_path)
-                .map_err(|e| format!("打开 {} 失败: {}", rc_path.display(), e))?;
-
-            for l in &fix_lines {
-                file.write_all(l.as_bytes())
-                    .map_err(|e| format!("写入 {} 失败: {}", rc_path.display(), e))?;
-            }
-        }
-
-        // On macOS, also write to .zprofile if not present
-        #[cfg(target_os = "macos")]
+        #[cfg(target_os = "windows")]
         {
-            let existing_profile = fs::read_to_string(&zprofile_path).unwrap_or_default();
-            if !existing_profile.contains("mise/shims") && !existing_profile.contains("mise activate") {
-                if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&zprofile_path) {
-                    let _ = f.write_all(b"\n# Mise PATH Hook\nexport PATH=\"$HOME/.local/share/mise/shims:$PATH\"\neval \"$(mise activate zsh)\"\n");
+            let ps_dir = home.join("Documents/PowerShell");
+            let _ = fs::create_dir_all(&ps_dir);
+            let ps_profile = ps_dir.join("Microsoft.PowerShell_profile.ps1");
+
+            let existing_profile = fs::read_to_string(&ps_profile).unwrap_or_default();
+            if !existing_profile.contains("mise activate") {
+                let hook = "\n# Mise Version Manager Hook\n(& mise activate ps1) | Out-String | Invoke-Expression\n";
+                let _ = fs::write(&ps_profile, existing_profile + hook);
+            }
+            env_helper::fix_system_path();
+            return Ok(true);
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let shell = env::var("SHELL").unwrap_or_default();
+            let rc_path = if shell.ends_with("bash") {
+                home.join(".bashrc")
+            } else {
+                home.join(".zshrc")
+            };
+            let zprofile_path = home.join(".zprofile");
+
+            // Ensure shims directory exists
+            let shims_dir = home.join(".local/share/mise/shims");
+            let _ = fs::create_dir_all(&shims_dir);
+
+            let mut fix_lines = Vec::new();
+            let existing_rc = fs::read_to_string(&rc_path).unwrap_or_default();
+
+            if !existing_rc.contains("mise/shims") {
+                fix_lines.push("\n# Mise Shims PATH\nexport PATH=\"$HOME/.local/share/mise/shims:$PATH\"\n");
+            }
+
+            if !existing_rc.contains("mise activate") && !existing_rc.contains("rtx activate") {
+                if shell.ends_with("bash") {
+                    fix_lines.push("# Mise Version Manager Hook\neval \"$(mise activate bash)\"\n");
+                } else {
+                    fix_lines.push("# Mise Version Manager Hook\neval \"$(mise activate zsh)\"\n");
                 }
             }
-        }
 
-        // Update current running process PATH
-        env_helper::fix_system_path();
-        return Ok(true);
+            if !fix_lines.is_empty() {
+                let mut file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&rc_path)
+                    .map_err(|e| format!("打开 {} 失败: {}", rc_path.display(), e))?;
+
+                for l in &fix_lines {
+                    file.write_all(l.as_bytes())
+                        .map_err(|e| format!("写入 {} 失败: {}", rc_path.display(), e))?;
+                }
+            }
+
+            // On macOS, also write to .zprofile if not present
+            #[cfg(target_os = "macos")]
+            {
+                let existing_profile = fs::read_to_string(&zprofile_path).unwrap_or_default();
+                if !existing_profile.contains("mise/shims") && !existing_profile.contains("mise activate") {
+                    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&zprofile_path) {
+                        let _ = f.write_all(b"\n# Mise PATH Hook\nexport PATH=\"$HOME/.local/share/mise/shims:$PATH\"\neval \"$(mise activate zsh)\"\n");
+                    }
+                }
+            }
+
+            // Update current running process PATH
+            env_helper::fix_system_path();
+            return Ok(true);
+        }
     }
     Ok(true)
 }

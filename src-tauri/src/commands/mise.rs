@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::process::Stdio;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 use crate::env_helper;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -318,6 +318,36 @@ fn clean_and_deduplicate_installed_versions(raw_versions: Vec<String>) -> Vec<St
     final_versions
 }
 
+fn get_mise_install_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".local/share/mise/installs"));
+    }
+    if let Some(data_local) = dirs::data_local_dir() {
+        dirs.push(data_local.join("mise/installs"));
+        dirs.push(data_local.join("mise\\installs"));
+    }
+    dirs
+}
+
+fn get_mise_config_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        paths.push(home.join(".config/mise/config.toml"));
+        paths.push(home.join(".mise.toml"));
+        paths.push(home.join(".tool-versions"));
+    }
+    if let Some(config_dir) = dirs::config_dir() {
+        paths.push(config_dir.join("mise/config.toml"));
+        paths.push(config_dir.join("mise\\config.toml"));
+    }
+    if let Some(data_local) = dirs::data_local_dir() {
+        paths.push(data_local.join("mise/config.toml"));
+        paths.push(data_local.join("mise\\config.toml"));
+    }
+    paths
+}
+
 #[tauri::command]
 pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
     // Ensure the latest prioritized PATH is active
@@ -341,6 +371,7 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
                     probe_execs.push("/opt/homebrew/bin/go".into());
                     probe_execs.push(home.join("go/bin/go").to_string_lossy().to_string());
                     probe_execs.push(home.join(".local/share/mise/shims/go").to_string_lossy().to_string());
+                    probe_execs.push("C:\\Program Files\\Go\\bin\\go.exe".into());
                 }
                 "python" => {
                     probe_execs.push("python".into());
@@ -349,25 +380,29 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
                 }
                 "rust" => {
                     probe_execs.push(home.join(".cargo/bin/rustc").to_string_lossy().to_string());
+                    probe_execs.push(home.join(".cargo/bin/rustc.exe").to_string_lossy().to_string());
                     probe_execs.push("/opt/homebrew/bin/rustc".into());
                 }
                 "node" => {
                     probe_execs.push("/opt/homebrew/bin/node".into());
                     probe_execs.push("/usr/local/bin/node".into());
+                    probe_execs.push("C:\\Program Files\\nodejs\\node.exe".into());
                     probe_execs.push(home.join(".local/share/mise/shims/node").to_string_lossy().to_string());
                 }
                 "bun" => {
                     probe_execs.push(home.join(".bun/bin/bun").to_string_lossy().to_string());
+                    probe_execs.push(home.join(".bun/bin/bun.exe").to_string_lossy().to_string());
                 }
                 "deno" => {
                     probe_execs.push(home.join(".deno/bin/deno").to_string_lossy().to_string());
+                    probe_execs.push(home.join(".deno/bin/deno.exe").to_string_lossy().to_string());
                 }
                 _ => {}
             }
         }
 
         for exec_path in probe_execs {
-            if let Ok(out) = std::process::Command::new(&exec_path).args(meta.version_args).output() {
+            if let Ok(out) = env_helper::create_silent_command(&exec_path).args(meta.version_args).output() {
                 if out.status.success() || (meta.id == "java" && !out.stderr.is_empty()) {
                     let stdout_str = String::from_utf8_lossy(&out.stdout);
                     let stderr_str = String::from_utf8_lossy(&out.stderr);
@@ -389,10 +424,10 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
             }
         }
 
-        // 2. Scan Mise installs directory directly: ~/.local/share/mise/installs/<tool>/*
-        if let Some(home) = dirs::home_dir() {
+        // 2. Scan Mise installs directories directly
+        for base_dir in get_mise_install_dirs() {
             for alias in meta.mise_aliases {
-                let install_dir = home.join(".local/share/mise/installs").join(alias);
+                let install_dir = base_dir.join(alias);
                 if install_dir.is_dir() {
                     if let Ok(entries) = std::fs::read_dir(install_dir) {
                         for entry in entries.flatten() {
@@ -413,8 +448,9 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
 
         // 3. Query Mise CLI if available
         if let Some(ref bin) = mise_bin {
+            let bin_str = bin.to_string_lossy();
             for alias in meta.mise_aliases {
-                if let Ok(output) = std::process::Command::new(bin).args(["ls", "--json", alias]).output() {
+                if let Ok(output) = env_helper::create_silent_command(&bin_str).args(["ls", "--json", alias]).output() {
                     if output.status.success() {
                         if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
                             if let Some(arr) = json_val.as_array() {
@@ -441,7 +477,7 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
 
             // Query Mise current active version
             if active_version.is_none() {
-                if let Ok(cur_out) = std::process::Command::new(bin).args(["current", meta.id]).output() {
+                if let Ok(cur_out) = env_helper::create_silent_command(&bin_str).args(["current", meta.id]).output() {
                     if cur_out.status.success() {
                         let cur_str = String::from_utf8_lossy(&cur_out.stdout).trim().to_string();
                         if !cur_str.is_empty() && !cur_str.starts_with("No version") {
@@ -460,7 +496,7 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
             }
 
             // Remote versions from mise ls-remote
-            if let Ok(output) = std::process::Command::new(bin).args(["ls-remote", meta.id]).output() {
+            if let Ok(output) = env_helper::create_silent_command(&bin_str).args(["ls-remote", meta.id]).output() {
                 if output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     let raw_list: Vec<String> = stdout
@@ -477,32 +513,25 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
             }
         }
 
-        // 4. Read global Mise configuration file ~/.config/mise/config.toml or ~/.tool-versions
-        if let Some(home) = dirs::home_dir() {
-            let config_paths = [
-                home.join(".config/mise/config.toml"),
-                home.join(".mise.toml"),
-                home.join(".tool-versions"),
-            ];
-            for cp in config_paths {
-                if cp.exists() {
-                    if let Ok(content) = std::fs::read_to_string(cp) {
-                        for line in content.lines() {
-                            let trim = line.trim();
-                            for alias in meta.mise_aliases {
-                                if trim.starts_with(alias) && (trim.contains('=') || trim.contains(' ')) {
-                                    let val = trim.split(|c: char| c == '=' || c.is_whitespace()).last().unwrap_or("").trim().trim_matches('"').trim_matches('\'');
-                                    if let Some(clean_v) = parse_version_output(meta.id, val) {
-                                        if is_valid_semver(&clean_v) {
-                                            if !installed_versions.contains(&clean_v) {
-                                                installed_versions.push(clean_v.clone());
-                                            }
-                                            if global_version.is_none() {
-                                                global_version = Some(clean_v.clone());
-                                            }
-                                            if active_version.is_none() {
-                                                active_version = Some(clean_v);
-                                            }
+        // 4. Read global Mise configuration files
+        for cp in get_mise_config_paths() {
+            if cp.exists() {
+                if let Ok(content) = std::fs::read_to_string(&cp) {
+                    for line in content.lines() {
+                        let trim = line.trim();
+                        for alias in meta.mise_aliases {
+                            if trim.starts_with(alias) && (trim.contains('=') || trim.contains(' ')) {
+                                let val = trim.split(|c: char| c == '=' || c.is_whitespace()).last().unwrap_or("").trim().trim_matches('"').trim_matches('\'');
+                                if let Some(clean_v) = parse_version_output(meta.id, val) {
+                                    if is_valid_semver(&clean_v) {
+                                        if !installed_versions.contains(&clean_v) {
+                                            installed_versions.push(clean_v.clone());
+                                        }
+                                        if global_version.is_none() {
+                                            global_version = Some(clean_v.clone());
+                                        }
+                                        if active_version.is_none() {
+                                            active_version = Some(clean_v);
                                         }
                                     }
                                 }
@@ -705,7 +734,7 @@ pub async fn get_remote_versions(tool_id: String) -> Result<Vec<String>, String>
 pub async fn set_global_version(tool_id: String, version: String) -> Result<bool, String> {
     if let Some(bin) = env_helper::find_mise_binary() {
         let target = format!("{}@{}", tool_id, version);
-        let status = Command::new(&bin)
+        let status = env_helper::create_silent_tokio_command(&bin.to_string_lossy())
             .args(["use", "-g", &target])
             .status()
             .await
@@ -730,28 +759,29 @@ pub async fn uninstall_runtime_version(tool_id: String, version: String) -> Resu
             format!("{}@{}", tool_id, version),
         ];
         for target in targets {
-            let _ = Command::new(&bin)
+            let _ = env_helper::create_silent_tokio_command(&bin.to_string_lossy())
                 .args(["uninstall", &target])
                 .status()
                 .await;
         }
     }
 
-    // 2. Direct clean up directory ~/.local/share/mise/installs/<tool>/<version>
-    if let Some(home) = dirs::home_dir() {
+    // 2. Direct clean up directory in all candidate installs locations
+    for base_dir in get_mise_install_dirs() {
         let install_candidates = [
-            home.join(".local/share/mise/installs").join(&tool_id).join(&clean_ver),
-            home.join(".local/share/mise/installs").join(&tool_id).join(&version),
-            home.join(".local/share/mise/installs").join(&tool_id).join(format!("v{}", clean_ver)),
+            base_dir.join(&tool_id).join(&clean_ver),
+            base_dir.join(&tool_id).join(&version),
+            base_dir.join(&tool_id).join(format!("v{}", clean_ver)),
         ];
         for d in install_candidates {
             if d.exists() {
                 let _ = std::fs::remove_dir_all(&d);
             }
         }
+    }
 
-        // Clean up from ~/.config/mise/config.toml
-        let config_file = home.join(".config/mise/config.toml");
+    // 3. Clean up from all configuration files
+    for config_file in get_mise_config_paths() {
         if config_file.exists() {
             if let Ok(content) = std::fs::read_to_string(&config_file) {
                 let lines: Vec<String> = content.lines()
@@ -782,7 +812,7 @@ pub async fn install_runtime_version(
     let _ = app.emit("install-log", format!("> mise install {}", target));
     let _ = app.emit("install-progress", 10);
 
-    let mut child = Command::new(mise_bin)
+    let mut child = env_helper::create_silent_tokio_command(&mise_bin.to_string_lossy())
         .args(["install", &target, "--verbose"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -825,21 +855,8 @@ pub async fn install_runtime_version(
         let reader = BufReader::new(stderr);
         let mut lines = reader.lines();
         tokio::spawn(async move {
-            let mut progress = 20;
             while let Ok(Some(line)) = lines.next_line().await {
                 let _ = app_clone2.emit("install-log", line.clone());
-                
-                let lower = line.to_lowercase();
-                if lower.contains("download") || lower.contains("get ") {
-                    progress = progress.max(40);
-                } else if lower.contains("200 ok") || lower.contains("downloaded") {
-                    progress = progress.max(70);
-                } else if lower.contains("extract") || lower.contains("install") {
-                    progress = progress.max(88);
-                } else if progress < 90 {
-                    progress += 2;
-                }
-                let _ = app_clone2.emit("install-progress", progress);
             }
         });
     }
@@ -857,24 +874,36 @@ pub async fn install_runtime_version(
 
 #[tauri::command]
 pub async fn bootstrap_mise_cli() -> Result<bool, String> {
-    let cmd = if cfg!(target_os = "windows") {
-        "powershell -c \"irm https://mise.jdx.dev/install.ps1 | iex\""
-    } else {
-        "curl https://mise.run | sh"
-    };
+    #[cfg(target_os = "windows")]
+    {
+        let status = env_helper::create_silent_tokio_command("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "irm https://mise.jdx.dev/install.ps1 | iex"])
+            .status()
+            .await
+            .map_err(|e| format!("执行 PowerShell 自举脚本失败: {}", e))?;
 
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .status()
-        .await
-        .map_err(|e| format!("执行自举脚本失败: {}", e))?;
+        if status.success() {
+            env_helper::fix_system_path();
+            return Ok(true);
+        } else {
+            return Err(format!("PowerShell 自举脚本返回错误退出码: {:?}", status.code()));
+        }
+    }
 
-    if status.success() {
-        env_helper::fix_system_path();
-        Ok(true)
-    } else {
-        Err(format!("自举脚本返回错误退出码: {:?}", status.code()))
+    #[cfg(not(target_os = "windows"))]
+    {
+        let status = env_helper::create_silent_tokio_command("sh")
+            .args(["-c", "curl https://mise.run | sh"])
+            .status()
+            .await
+            .map_err(|e| format!("执行自举脚本失败: {}", e))?;
+
+        if status.success() {
+            env_helper::fix_system_path();
+            return Ok(true);
+        } else {
+            return Err(format!("自举脚本返回错误退出码: {:?}", status.code()));
+        }
     }
 }
 
@@ -904,7 +933,7 @@ pub async fn open_terminal_for_runtime(tool_id: String, version: String) -> Resu
         _ => (&tool_id, &["--version"]),
     };
 
-    let probe_out = std::process::Command::new(exec).args(args).output();
+    let probe_out = env_helper::create_silent_command(exec).args(args).output();
     let version_output = if let Ok(out) = probe_out {
         let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
