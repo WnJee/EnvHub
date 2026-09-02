@@ -49,7 +49,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400 bg-[#090D16]">
         <ShieldAlert className="w-12 h-12 text-slate-600 mb-3" />
-        <h3 className="text-base font-semibold text-slate-300">正在探测本机开发环境运行时...</h3>
+        <h3 className="text-base font-semibold text-slate-300">正在检查开发环境运行时...</h3>
         <p className="text-xs text-slate-400 mt-1">如无数据请检查是否安装了对应语言编译器或 Mise CLI</p>
       </div>
     );
@@ -72,11 +72,11 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
   return (
     <div className="flex-1 flex overflow-hidden bg-[#090D16]">
       {/* Left List of Runtimes */}
-      <div className="w-80 border-r border-slate-800/80 bg-[#0B1120]/60 flex flex-col shrink-0">
-        <div className="p-4 border-b border-slate-800/80 flex items-center justify-between">
+      <div className="w-56 sm:w-64 border-r border-slate-800/80 bg-[#0B1120]/60 flex flex-col shrink-0">
+        <div className="p-3.5 border-b border-slate-800/80 flex items-center justify-between">
           <div className="text-xs font-bold uppercase tracking-wider text-slate-400 font-mono flex items-center gap-1.5">
             <Layers className="w-3.5 h-3.5 text-blue-400" />
-            开发环境运行时 ({filteredRuntimes.length})
+            开发语言 ({filteredRuntimes.length})
           </div>
         </div>
 
@@ -92,14 +92,14 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                   setSelectedToolId(tool.id);
                   setRemoteSearch('');
                 }}
-                className={`w-full flex items-center justify-between p-3 rounded-xl transition-all duration-200 text-left group ${
+                className={`w-full flex items-center justify-between p-2.5 rounded-xl transition-all duration-200 text-left group ${
                   isSelected
                     ? 'bg-blue-600/15 border border-blue-500/30 text-white shadow-sm'
                     : 'hover:bg-slate-800/40 border border-transparent text-slate-300'
                 }`}
               >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-9 h-9 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center p-1.5 shrink-0 group-hover:scale-105 transition-transform">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center p-1 shrink-0 group-hover:scale-105 transition-transform">
                     <img 
                       src={tool.icon} 
                       alt={tool.name} 
@@ -110,27 +110,27 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                     />
                   </div>
                   <div className="truncate">
-                    <div className="text-sm font-semibold flex items-center gap-1.5">
+                    <div className="text-xs font-semibold flex items-center gap-1.5">
                       {tool.name}
                       {tool.activeVersion && (
-                        <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                        <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
                           v{tool.activeVersion}
                         </span>
                       )}
                     </div>
-                    <div className="text-[11px] text-slate-400 truncate">{tool.description}</div>
+                    <div className="text-[10px] text-slate-400 truncate">{tool.description}</div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 pl-2 shrink-0">
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-mono ${
+                <div className="flex items-center gap-1.5 pl-1.5 shrink-0">
+                  <span className={`text-[9px] px-1.5 py-0.2 rounded-md font-mono ${
                     installedCount > 0 
                       ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' 
                       : 'bg-slate-900 text-slate-400'
                   }`}>
-                    {installedCount > 0 ? `${installedCount} 已装` : '未安装'}
+                    {installedCount > 0 ? `${installedCount} 个` : '未装'}
                   </span>
-                  <ChevronRight className={`w-3.5 h-3.5 transition-transform ${isSelected ? 'text-blue-400 translate-x-0.5' : 'text-slate-400'}`} />
+                  <ChevronRight className={`w-3 h-3 transition-transform ${isSelected ? 'text-blue-400 translate-x-0.5' : 'text-slate-400'}`} />
                 </div>
               </button>
             );
@@ -139,20 +139,20 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
       </div>
 
       {/* Right Detail Pane */}
-      <div className="flex-1 flex flex-col overflow-y-auto p-6 space-y-6">
+      <div className="flex-1 flex flex-col overflow-y-auto p-4 sm:p-6 space-y-5">
         {/* Tool Header Banner */}
-        <div className="p-6 rounded-2xl bg-gradient-to-r from-slate-900/90 via-slate-900/70 to-blue-950/20 border border-slate-800/80 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 shadow-xl">
-          <div className="flex items-center gap-4">
-            <div className="w-16 h-16 rounded-2xl bg-slate-900/90 border border-slate-700/60 p-3 shadow-inner flex items-center justify-center shrink-0">
+        <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-slate-900/90 via-slate-900/70 to-blue-950/20 border border-slate-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xl">
+          <div className="flex items-center gap-3.5 min-w-0">
+            <div className="w-12 h-12 rounded-xl bg-slate-900/90 border border-slate-700/60 p-2.5 shadow-inner flex items-center justify-center shrink-0">
               <img 
                 src={currentTool.icon} 
                 alt={currentTool.name} 
                 className="w-full h-full object-contain" 
               />
             </div>
-            <div>
-              <div className="flex items-center gap-3">
-                <h2 className="text-2xl font-bold text-white tracking-tight">{currentTool.name}</h2>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2.5">
+                <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">{currentTool.name}</h2>
                 <a
                   href={currentTool.officialSite}
                   target="_blank"
@@ -162,56 +162,56 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                   官网文档 <ExternalLink className="w-3 h-3" />
                 </a>
               </div>
-              <p className="text-xs text-slate-400 mt-1 max-w-xl">{currentTool.description}</p>
+              <p className="text-xs text-slate-400 mt-0.5 truncate max-w-lg">{currentTool.description}</p>
             </div>
           </div>
 
           {/* Current Global & Active Status Card */}
-          <div className="flex items-center gap-3 bg-slate-950/70 p-3 rounded-xl border border-slate-800">
+          <div className="flex items-center gap-3 bg-slate-950/70 px-3.5 py-2 rounded-xl border border-slate-800 shrink-0">
             <div>
-              <div className="text-[10px] uppercase font-mono text-slate-400">本机系统环境生效版本</div>
-              <div className="text-sm font-bold font-mono text-emerald-400 flex items-center gap-1.5 mt-0.5">
-                <Zap className="w-3.5 h-3.5 text-emerald-400" />
-                {currentTool.activeVersion ? `v${currentTool.activeVersion}` : '未在 PATH 中检测到'}
+              <div className="text-[9px] uppercase font-mono text-slate-400">当前主用版本</div>
+              <div className="text-xs font-bold font-mono text-emerald-400 flex items-center gap-1 mt-0.5">
+                <Zap className="w-3 h-3 text-emerald-400" />
+                {currentTool.activeVersion ? `v${currentTool.activeVersion}` : '未在 PATH 中'}
               </div>
             </div>
-            <div className="h-8 w-px bg-slate-800 mx-1" />
+            <div className="h-6 w-px bg-slate-800 mx-1" />
             <div>
-              <div className="text-[10px] uppercase font-mono text-slate-400">检测到的已装版本</div>
-              <div className="text-sm font-bold font-mono text-blue-400 mt-0.5">
+              <div className="text-[9px] uppercase font-mono text-slate-400">已安装版本</div>
+              <div className="text-xs font-bold font-mono text-blue-400 mt-0.5">
                 {currentTool.installedVersions.length} 个
               </div>
             </div>
           </div>
         </div>
 
-        {/* Section 1: Installed Versions Management */}
-        <div className="space-y-3">
+        {/* Section 1: Installed Versions */}
+        <div className="space-y-2.5">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
-              <Globe className="w-4 h-4 text-blue-400" />
-              本机已安装版本 (真实探测)
+            <h3 className="text-xs sm:text-sm font-bold text-slate-200 flex items-center gap-2">
+              <Globe className="w-3.5 h-3.5 text-blue-400" />
+              本地已安装版本
             </h3>
-            <span className="text-xs text-slate-400">
-              真实读取自系统 PATH 及 Mise 本地库
+            <span className="text-[11px] text-slate-400">
+              管理系统 PATH 与全局默认版本
             </span>
           </div>
 
           {currentTool.installedVersions.length === 0 ? (
-            <div className="p-8 rounded-2xl bg-slate-900/40 border border-dashed border-slate-800 text-center">
-              <ShieldAlert className="w-8 h-8 text-amber-400/80 mx-auto mb-2" />
-              <p className="text-sm font-medium text-slate-300">本机尚未安装 {currentTool.name} 或未加入环境变量</p>
-              <p className="text-xs text-slate-400 mt-1">可在下方在线版本仓库中输入版本号进行真实下载安装</p>
+            <div className="p-6 rounded-2xl bg-slate-900/40 border border-dashed border-slate-800 text-center">
+              <ShieldAlert className="w-7 h-7 text-amber-400/80 mx-auto mb-2" />
+              <p className="text-xs sm:text-sm font-medium text-slate-300">本机尚未安装 {currentTool.name}</p>
+              <p className="text-[11px] text-slate-400 mt-0.5">可在下方版本仓库中选择或输入版本号进行安装</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
               {currentTool.installedVersions.map((ver) => {
                 const isGlobal = currentTool.globalVersion === ver || currentTool.activeVersion === ver;
 
                 return (
                   <div
                     key={ver}
-                    className={`p-4 rounded-xl border transition-all duration-200 flex flex-col justify-between ${
+                    className={`p-3.5 rounded-xl border transition-all duration-200 flex flex-col justify-between ${
                       isGlobal
                         ? 'bg-blue-950/20 border-blue-500/40 shadow-sm'
                         : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
@@ -219,39 +219,39 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                   >
                     <div className="flex items-start justify-between">
                       <div>
-                        <div className="font-mono text-base font-bold text-white flex items-center gap-2">
+                        <div className="font-mono text-sm sm:text-base font-bold text-white flex items-center gap-2">
                           v{ver}
                           {isGlobal && (
-                            <span className="text-[10px] font-sans px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1 font-semibold">
-                              <Check className="w-3 h-3" /> 当前主用
+                            <span className="text-[9px] font-sans px-2 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1 font-semibold">
+                              <Check className="w-2.5 h-2.5" /> 主用
                             </span>
                           )}
                         </div>
-                        <div className="text-[11px] text-slate-400 font-mono mt-1">
-                          系统真实环境可用
+                        <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                          环境已就绪
                         </div>
                       </div>
 
                       <button
                         onClick={() => onUninstallVersion(currentTool.id, ver)}
                         title="卸载此版本"
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                        className="p-1 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
 
-                    <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                    <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-2">
                       {!isGlobal ? (
                         <button
                           onClick={() => onSetGlobalVersion(currentTool.id, ver)}
-                          className="flex-1 px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 text-xs font-semibold transition-all flex items-center justify-center gap-1"
+                          className="flex-1 px-3 py-1 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 text-xs font-semibold transition-all flex items-center justify-center gap-1"
                         >
-                          <Zap className="w-3.5 h-3.5" /> 切换为主用版本
+                          <Zap className="w-3 h-3" /> 设为主用版本
                         </button>
                       ) : (
-                        <div className="text-xs text-emerald-400 font-medium flex items-center gap-1 py-1">
-                          <Check className="w-3.5 h-3.5" /> 当前终端 PATH 正在调用
+                        <div className="text-xs text-emerald-400 font-medium flex items-center gap-1 py-0.5">
+                          <Check className="w-3 h-3" /> 命令行终端默认调用
                         </div>
                       )}
                     </div>
@@ -262,15 +262,15 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
           )}
         </div>
 
-        {/* Section 2: Remote Versions & 1-Click Install */}
-        <div className="space-y-3 pt-4 border-t border-slate-800/80">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        {/* Section 2: Remote Versions & Install */}
+        <div className="space-y-2.5 pt-3 border-t border-slate-800/80">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
             <div>
-              <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
-                <Download className="w-4 h-4 text-emerald-400" />
-                在线版本仓库 (mise registry)
+              <h3 className="text-xs sm:text-sm font-bold text-slate-200 flex items-center gap-2">
+                <Download className="w-3.5 h-3.5 text-emerald-400" />
+                在线版本仓库
               </h3>
-              <p className="text-xs text-slate-400">选择官方发布版本一键在线下载并配置环境</p>
+              <p className="text-[11px] text-slate-400">选择官方发布版本一键下载并配置环境</p>
             </div>
 
             {/* Filter tags & Search */}
@@ -278,7 +278,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
               <div className="flex bg-slate-900 p-0.5 rounded-lg border border-slate-800 text-xs">
                 <button
                   onClick={() => setVersionFilter('all')}
-                  className={`px-2.5 py-1 rounded-md transition-colors ${
+                  className={`px-2 py-0.5 rounded-md transition-colors text-xs ${
                     versionFilter === 'all' ? 'bg-blue-600 text-white font-medium' : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
@@ -286,32 +286,32 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                 </button>
                 <button
                   onClick={() => setVersionFilter('lts')}
-                  className={`px-2.5 py-1 rounded-md transition-colors ${
+                  className={`px-2 py-0.5 rounded-md transition-colors text-xs ${
                     versionFilter === 'lts' ? 'bg-blue-600 text-white font-medium' : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  LTS 长期维护
+                  LTS
                 </button>
               </div>
 
-              <div className="relative w-36">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <div className="relative w-32 sm:w-36">
+                <Search className="w-3 h-3 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="过滤版本号..."
+                  placeholder="过滤版本..."
                   value={remoteSearch}
                   onChange={(e) => setRemoteSearch(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-800 text-xs text-slate-200 rounded-lg pl-7 pr-2.5 py-1.5 focus:outline-none focus:border-blue-500"
+                  className="w-full bg-slate-900 border border-slate-800 text-xs text-slate-200 rounded-lg pl-7 pr-2 py-1 focus:outline-none focus:border-blue-500"
                 />
               </div>
             </div>
           </div>
 
           {/* Quick Custom Version Installer */}
-          <div className="p-3 rounded-xl bg-slate-900/70 border border-slate-800 flex items-center justify-between gap-3">
+          <div className="p-2.5 sm:p-3 rounded-xl bg-slate-900/70 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs text-slate-300">
-              <Terminal className="w-4 h-4 text-slate-400" />
-              <span>自定义安装版本/分支 (例如: 22.12.0 / 3.12.7 / latest):</span>
+              <Terminal className="w-3.5 h-3.5 text-slate-400" />
+              <span>安装指定版本 (例如: 22.12.0 / 3.12.7 / latest):</span>
             </div>
             <div className="flex items-center gap-2">
               <input
@@ -319,7 +319,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                 placeholder="例如: 22.12.0"
                 value={customVersionInput}
                 onChange={(e) => setCustomVersionInput(e.target.value)}
-                className="bg-slate-950 border border-slate-800 text-xs text-white rounded-lg px-3 py-1 font-mono w-32 focus:outline-none focus:border-blue-500"
+                className="bg-slate-950 border border-slate-800 text-xs text-white rounded-lg px-2.5 py-1 font-mono w-28 focus:outline-none focus:border-blue-500"
               />
               <button
                 disabled={!customVersionInput.trim()}
@@ -331,21 +331,21 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                 }}
                 className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-semibold transition-colors flex items-center gap-1"
               >
-                <Plus className="w-3.5 h-3.5" /> 真实安装
+                <Plus className="w-3 h-3" /> 一键安装
               </button>
             </div>
           </div>
 
           {/* Remote Version Table / Cards */}
           {availableVersionsFiltered.length === 0 ? (
-            <div className="p-6 rounded-xl bg-slate-900/30 border border-slate-800/80 text-center">
-              <AlertCircle className="w-6 h-6 text-slate-400 mx-auto mb-2" />
+            <div className="p-5 rounded-xl bg-slate-900/30 border border-slate-800/80 text-center">
+              <AlertCircle className="w-5 h-5 text-slate-400 mx-auto mb-1.5" />
               <p className="text-xs text-slate-400">
-                暂未从底层 CLI 拉取到远程版本列表。您可以通过上方输入框输入版本号直接执行真实安装。
+                暂未获取到在线版本列表。可通过上方输入框直接输入版本号进行安装。
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 max-h-72 overflow-y-auto p-1">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2 max-h-64 overflow-y-auto p-1">
               {availableVersionsFiltered.map((ver) => {
                 const isInstalled = currentTool.installedVersions.includes(ver);
                 const isLts = ver.includes('20.') || ver.includes('18.') || ver.includes('21.') || ver.includes('3.12');
@@ -370,10 +370,10 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                       )}
                     </div>
 
-                    <div className="mt-2 pt-2 border-t border-slate-800/60 flex justify-end">
+                    <div className="mt-2 pt-1.5 border-t border-slate-800/60 flex justify-end">
                       {isInstalled ? (
                         <span className="text-[10px] text-emerald-400 font-medium flex items-center gap-1">
-                          <Check className="w-3 h-3" /> 已就绪
+                          <Check className="w-2.5 h-2.5" /> 已就绪
                         </span>
                       ) : (
                         <button

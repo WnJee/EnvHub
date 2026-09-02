@@ -30,7 +30,7 @@ export const EnvHealth: React.FC<EnvHealthProps> = ({
     setFixingId(id);
     try {
       await onAutoFix(id);
-      toast.success('已自动向您的终端配置文件中写入激活脚本与 PATH，并同步当前环境！');
+      toast.success('已自动修复配置并同步环境变量！');
       onRefresh();
     } catch (err) {
       toast.error(`自动修复失败: ${err}`);
@@ -43,70 +43,70 @@ export const EnvHealth: React.FC<EnvHealthProps> = ({
   const issueCount = healthChecks.filter((c) => c.status !== 'ok').length;
 
   return (
-    <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-[#090D16]">
+    <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 bg-[#090D16]">
       {/* Top Banner */}
-      <div className="p-6 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900 to-emerald-950/30 border border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xl">
+      <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-slate-900 via-slate-900 to-emerald-950/30 border border-slate-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-xl">
         <div>
           <div className="flex items-center gap-2 text-emerald-400 font-mono text-xs uppercase font-semibold">
-            <ShieldCheck className="w-4 h-4" />
-            Environment & Shell Integration Diagnostics
+            <ShieldCheck className="w-3.5 h-3.5" />
+            Environment Diagnostics
           </div>
-          <h2 className="text-xl font-bold text-white mt-1">环境健康诊断与 Shell 激活</h2>
-          <p className="text-xs text-slate-400 mt-1 max-w-xl">
-            真实排查本机终端 Shell RC 配置与 GUI 环境变量继承状态，确保命令行与桌面客户端无缝同步。
+          <h2 className="text-lg sm:text-xl font-bold text-white mt-1">环境健康诊断与 Shell 激活</h2>
+          <p className="text-xs text-slate-400 mt-0.5 max-w-xl">
+            排查终端 Shell RC 配置与环境变量继承状态，确保命令行与桌面客户端无缝同步。
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-center shrink-0">
-            <div className="text-[10px] uppercase font-mono text-slate-400">健康评级</div>
-            <div className="text-sm font-bold text-emerald-400 font-mono mt-0.5">
-              {issueCount === 0 ? '100% 优良' : `${okCount}/${healthChecks.length} 项就绪`}
+        <div className="flex items-center gap-2.5 shrink-0">
+          <div className="px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-center shrink-0">
+            <div className="text-[9px] uppercase font-mono text-slate-400">健康评级</div>
+            <div className="text-xs font-bold text-emerald-400 font-mono mt-0.5">
+              {issueCount === 0 ? '全部就绪' : `${okCount}/${healthChecks.length} 项就绪`}
             </div>
           </div>
           <button
             onClick={onRefresh}
-            className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
-            title="重新真实自检"
+            className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors shrink-0"
+            title="重新检查"
           >
-            <RefreshCw className="w-4 h-4" />
+            <RefreshCw className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
       {/* Health Checks List */}
-      <div className="space-y-3">
+      <div className="space-y-2.5">
         {healthChecks.map((item) => {
           const isOk = item.status === 'ok';
           return (
             <div
               key={item.id}
-              className={`p-5 rounded-2xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-4 ${
+              className={`p-4 rounded-2xl border transition-all flex flex-col md:flex-row md:items-center justify-between gap-3 ${
                 isOk
                   ? 'bg-slate-900/60 border-slate-800/80'
                   : 'bg-rose-950/20 border-rose-500/40 shadow-sm'
               }`}
             >
-              <div className="flex items-start gap-4">
-                <div className="p-2 rounded-xl mt-0.5 shrink-0">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="p-1.5 rounded-xl mt-0.5 shrink-0">
                   {isOk ? (
-                    <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
-                      <CheckCircle2 className="w-5 h-5" />
+                    <div className="w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+                      <CheckCircle2 className="w-4 h-4" />
                     </div>
                   ) : (
-                    <div className="w-8 h-8 rounded-xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400 animate-pulse">
-                      <AlertTriangle className="w-5 h-5" />
+                    <div className="w-7 h-7 rounded-lg bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400 animate-pulse">
+                      <AlertTriangle className="w-4 h-4" />
                     </div>
                   )}
                 </div>
 
-                <div className="space-y-1">
+                <div className="space-y-0.5 min-w-0">
                   <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-bold text-white tracking-tight">
+                    <h3 className="text-xs sm:text-sm font-bold text-white tracking-tight truncate">
                       {item.title}
                     </h3>
                     <span
-                      className={`text-[10px] font-mono px-2 py-0.2 rounded-full font-semibold ${
+                      className={`text-[9px] font-mono px-2 py-0.2 rounded-full font-semibold shrink-0 ${
                         isOk
                           ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                           : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
@@ -116,14 +116,14 @@ export const EnvHealth: React.FC<EnvHealthProps> = ({
                     </span>
                   </div>
                   <p className="text-xs text-slate-400">{item.message}</p>
-                  <div className="flex items-center gap-3 text-[11px] font-mono text-slate-400 pt-1">
-                    <span className="flex items-center gap-1">
-                      <Terminal className="w-3 h-3 text-slate-400" />
+                  <div className="flex items-center gap-2 text-[10px] font-mono text-slate-400 pt-0.5">
+                    <span className="flex items-center gap-1 truncate">
+                      <Terminal className="w-2.5 h-2.5 text-slate-400" />
                       {item.shell}
                     </span>
                     <span>•</span>
-                    <span className="flex items-center gap-1">
-                      <FileCode className="w-3 h-3 text-slate-400" />
+                    <span className="flex items-center gap-1 truncate">
+                      <FileCode className="w-2.5 h-2.5 text-slate-400" />
                       {item.configFile}
                     </span>
                   </div>
@@ -131,23 +131,23 @@ export const EnvHealth: React.FC<EnvHealthProps> = ({
               </div>
 
               {/* Actions */}
-              <div className="flex items-center justify-end shrink-0">
+              <div className="flex items-center justify-end shrink-0 pt-2 md:pt-0">
                 {isOk ? (
-                  <div className="text-xs text-emerald-400 font-mono font-medium flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-500/5">
-                    <ShieldCheck className="w-4 h-4" /> 状态良好
+                  <div className="text-xs text-emerald-400 font-mono font-medium flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-500/5">
+                    <ShieldCheck className="w-3.5 h-3.5" /> 状态良好
                   </div>
                 ) : (
                   <button
                     onClick={() => handleFix(item.id)}
                     disabled={fixingId === item.id}
-                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-all flex items-center gap-1.5"
+                    className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-all flex items-center gap-1.5"
                   >
                     {fixingId === item.id ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
                     ) : (
                       <Wrench className="w-3.5 h-3.5" />
                     )}
-                    <span>{fixingId === item.id ? '正在写入...' : '一键自动修复'}</span>
+                    <span>{fixingId === item.id ? '正在修复...' : '一键修复'}</span>
                   </button>
                 )}
               </div>
