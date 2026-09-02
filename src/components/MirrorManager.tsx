@@ -6,8 +6,10 @@ import {
   Server, 
   Activity, 
   FileText, 
-  ArrowRight
+  ArrowRight,
+  ShieldAlert
 } from 'lucide-react';
+import { useToast } from './Toast';
 
 interface MirrorManagerProps {
   mirrors: MirrorConfig[];
@@ -23,24 +25,35 @@ export const MirrorManager: React.FC<MirrorManagerProps> = ({
   isPinging,
 }) => {
   const [activeTab, setActiveTab] = useState<string>(mirrors[0]?.tool || 'npm');
-  const [successToast, setSuccessToast] = useState<string | null>(null);
+  const toast = useToast();
 
   const currentMirrorConfig = mirrors.find((m) => m.tool === activeTab) || mirrors[0];
 
   const handleApply = (tool: string, url: string, name: string) => {
-    onSetMirror(tool, url);
-    setSuccessToast(`已成功将 ${tool.toUpperCase()} 镜像源切换为「${name}」并写入本地配置！`);
-    setTimeout(() => {
-      setSuccessToast(null);
-    }, 3500);
+    try {
+      onSetMirror(tool, url);
+      toast.success(`已成功将 ${tool.toUpperCase()} 镜像源切换为「${name}」并写入本机系统配置！`);
+    } catch (err) {
+      toast.error(`写入镜像配置失败: ${err}`);
+    }
   };
 
   const getPingColor = (ping?: number) => {
     if (!ping) return 'text-slate-400 bg-slate-800';
+    if (ping === 999) return 'text-rose-400 bg-rose-500/10 border-rose-500/20';
     if (ping < 50) return 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
     if (ping < 150) return 'text-amber-400 bg-amber-500/10 border-amber-500/20';
     return 'text-rose-400 bg-rose-500/10 border-rose-500/20';
   };
+
+  if (mirrors.length === 0) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400 bg-[#090D16]">
+        <ShieldAlert className="w-12 h-12 text-slate-600 mb-3" />
+        <h3 className="text-base font-semibold text-slate-300">正在读取本机镜像配置文件...</h3>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-[#090D16]">
@@ -51,9 +64,9 @@ export const MirrorManager: React.FC<MirrorManagerProps> = ({
             <Zap className="w-4 h-4" />
             Domestic Network & Mirror Acceleration
           </div>
-          <h2 className="text-xl font-bold text-white mt-1">国内镜像源一键加速与测速</h2>
+          <h2 className="text-xl font-bold text-white mt-1">国内镜像源一键加速与真实测速</h2>
           <p className="text-xs text-slate-400 mt-1 max-w-xl">
-            解决 Node/Python/Go/Rust/Homebrew 在国内下载依赖经常超时、失败的问题。一键实时测试全国 CDN 延迟并自动写入系统配置。
+            真实读取与写入本地 <code className="text-blue-400">~/.npmrc</code>、<code className="text-blue-400">~/.pip/pip.conf</code>、<code className="text-blue-400">~/.cargo/config.toml</code> 与 Go 环境变量。
           </p>
         </div>
 
@@ -63,17 +76,9 @@ export const MirrorManager: React.FC<MirrorManagerProps> = ({
           className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-semibold shadow-lg shadow-amber-500/20 flex items-center gap-2 transition-all shrink-0"
         >
           <Activity className={`w-4 h-4 ${isPinging ? 'animate-spin' : ''}`} />
-          {isPinging ? '正在测试全国节点延迟...' : '一键测速全部镜像'}
+          {isPinging ? '正在真实测试各节点延迟...' : '一键测速全部镜像'}
         </button>
       </div>
-
-      {/* Success Notification */}
-      {successToast && (
-        <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-medium flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
-          <Check className="w-4 h-4 shrink-0" />
-          <span>{successToast}</span>
-        </div>
-      )}
 
       {/* Mirror Tabs */}
       <div className="flex bg-slate-900/80 p-1.5 rounded-2xl border border-slate-800 gap-1.5 overflow-x-auto">
@@ -105,13 +110,13 @@ export const MirrorManager: React.FC<MirrorManagerProps> = ({
               {currentMirrorConfig.name} 可用高速镜像源列表
             </h3>
             <span className="text-xs text-slate-400 font-mono">
-              当前生效: <span className="text-blue-400">{currentMirrorConfig.currentMirror}</span>
+              当前真实生效: <span className="text-blue-400">{currentMirrorConfig.currentMirror}</span>
             </span>
           </div>
 
           <div className="grid grid-cols-1 gap-3">
             {currentMirrorConfig.options.map((opt) => {
-              const isCurrent = currentMirrorConfig.currentMirror === opt.url;
+              const isCurrent = currentMirrorConfig.currentMirror.trim() === opt.url.trim();
               return (
                 <div
                   key={opt.url}
@@ -150,7 +155,7 @@ export const MirrorManager: React.FC<MirrorManagerProps> = ({
                       )}`}
                     >
                       <Activity className="w-3 h-3" />
-                      <span>{opt.ping ? `${opt.ping} ms` : '未测速'}</span>
+                      <span>{opt.ping ? (opt.ping === 999 ? '超时' : `${opt.ping} ms`) : '未测速'}</span>
                     </div>
 
                     {/* Switch Button */}

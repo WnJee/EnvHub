@@ -9,6 +9,7 @@ import {
   FileCode, 
   RefreshCw 
 } from 'lucide-react';
+import { useToast } from './Toast';
 
 interface EnvHealthProps {
   healthChecks: EnvHealthCheck[];
@@ -22,11 +23,18 @@ export const EnvHealth: React.FC<EnvHealthProps> = ({
   onRefresh,
 }) => {
   const [fixingId, setFixingId] = useState<string | null>(null);
+  const toast = useToast();
 
   const handleFix = async (id: string) => {
     setFixingId(id);
-    await onAutoFix(id);
-    setFixingId(null);
+    try {
+      await onAutoFix(id);
+      toast.success('已自动向您的终端配置文件中写入激活脚本！');
+    } catch (err) {
+      toast.error(`自动修复失败: ${err}`);
+    } finally {
+      setFixingId(null);
+    }
   };
 
   const okCount = healthChecks.filter((c) => c.status === 'ok').length;
@@ -43,7 +51,7 @@ export const EnvHealth: React.FC<EnvHealthProps> = ({
           </div>
           <h2 className="text-xl font-bold text-white mt-1">环境健康诊断与 Shell 激活</h2>
           <p className="text-xs text-slate-400 mt-1 max-w-xl">
-            诊断 macOS/Linux/Windows 下终端 Shell RC 配置与 GUI 环境变量继承状态，确保命令行与桌面客户端无缝同步。
+            真实排查本机终端 Shell RC 配置与 GUI 环境变量继承状态，确保命令行与桌面客户端无缝同步。
           </p>
         </div>
 
@@ -51,13 +59,13 @@ export const EnvHealth: React.FC<EnvHealthProps> = ({
           <div className="px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-center shrink-0">
             <div className="text-[10px] uppercase font-mono text-slate-400">健康评级</div>
             <div className="text-sm font-bold text-emerald-400 font-mono mt-0.5">
-              {issueCount === 0 ? '100% 优良' : `${okCount}/${healthChecks.length} 项正常`}
+              {issueCount === 0 ? '100% 优良' : `${okCount}/${healthChecks.length} 项就绪`}
             </div>
           </div>
           <button
             onClick={onRefresh}
             className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
-            title="重新自检"
+            title="重新真实自检"
           >
             <RefreshCw className="w-4 h-4" />
           </button>
@@ -102,7 +110,7 @@ export const EnvHealth: React.FC<EnvHealthProps> = ({
                           : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
                       }`}
                     >
-                      {isOk ? '正常' : '需修复'}
+                      {isOk ? '正常' : '需配置'}
                     </span>
                   </div>
                   <p className="text-xs text-slate-400">{item.message}</p>
@@ -133,7 +141,7 @@ export const EnvHealth: React.FC<EnvHealthProps> = ({
                     className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-all flex items-center gap-1.5"
                   >
                     <Wrench className={`w-3.5 h-3.5 ${fixingId === item.id ? 'animate-spin' : ''}`} />
-                    <span>{fixingId === item.id ? '正在修复...' : '一键自动修复'}</span>
+                    <span>{fixingId === item.id ? '正在写入...' : '一键自动修复'}</span>
                   </button>
                 )}
               </div>

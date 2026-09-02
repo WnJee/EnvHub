@@ -1,7 +1,5 @@
 import React, { useState } from 'react';
-import { 
-  RuntimeTool, 
-} from '../types';
+import { RuntimeTool } from '../types';
 import { 
   Check, 
   Download, 
@@ -14,7 +12,8 @@ import {
   ChevronRight,
   Terminal,
   Zap,
-  Plus
+  Plus,
+  AlertCircle
 } from 'lucide-react';
 
 interface RuntimeManagerProps {
@@ -47,7 +46,13 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
   const currentTool = runtimes.find((t) => t.id === selectedToolId) || runtimes[0];
 
   if (!currentTool) {
-    return <div className="p-8 text-center text-slate-400">暂无可用的运行时</div>;
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400 bg-[#090D16]">
+        <ShieldAlert className="w-12 h-12 text-slate-600 mb-3" />
+        <h3 className="text-base font-semibold text-slate-300">正在探测本机开发环境运行时...</h3>
+        <p className="text-xs text-slate-400 mt-1">如无数据请检查是否安装了对应语言编译器或 Mise CLI</p>
+      </div>
+    );
   }
 
   // Filter remote versions
@@ -59,8 +64,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
       return currentTool.installedVersions.includes(v);
     }
     if (versionFilter === 'lts') {
-      // General heuristics for LTS
-      return v.includes('20.') || v.includes('18.') || v.includes('21.') || v.includes('3.12') || v.includes('temurin-21');
+      return v.includes('20.') || v.includes('18.') || v.includes('21.') || v.includes('3.12') || v.includes('temurin-21') || v.includes('lts');
     }
     return true;
   });
@@ -72,7 +76,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
         <div className="p-4 border-b border-slate-800/80 flex items-center justify-between">
           <div className="text-xs font-bold uppercase tracking-wider text-slate-400 font-mono flex items-center gap-1.5">
             <Layers className="w-3.5 h-3.5 text-blue-400" />
-            开发语言与环境 ({filteredRuntimes.length})
+            开发环境运行时 ({filteredRuntimes.length})
           </div>
         </div>
 
@@ -121,10 +125,10 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                 <div className="flex items-center gap-2 pl-2 shrink-0">
                   <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-mono ${
                     installedCount > 0 
-                      ? 'bg-slate-800 text-slate-300' 
+                      ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30' 
                       : 'bg-slate-900 text-slate-400'
                   }`}>
-                    {installedCount} 版本
+                    {installedCount > 0 ? `${installedCount} 已装` : '未安装'}
                   </span>
                   <ChevronRight className={`w-3.5 h-3.5 transition-transform ${isSelected ? 'text-blue-400 translate-x-0.5' : 'text-slate-400'}`} />
                 </div>
@@ -165,15 +169,15 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
           {/* Current Global & Active Status Card */}
           <div className="flex items-center gap-3 bg-slate-950/70 p-3 rounded-xl border border-slate-800">
             <div>
-              <div className="text-[10px] uppercase font-mono text-slate-400">当前系统全局生效</div>
+              <div className="text-[10px] uppercase font-mono text-slate-400">本机系统环境生效版本</div>
               <div className="text-sm font-bold font-mono text-emerald-400 flex items-center gap-1.5 mt-0.5">
                 <Zap className="w-3.5 h-3.5 text-emerald-400" />
-                {currentTool.globalVersion ? `v${currentTool.globalVersion}` : '未设置'}
+                {currentTool.activeVersion ? `v${currentTool.activeVersion}` : '未在 PATH 中检测到'}
               </div>
             </div>
             <div className="h-8 w-px bg-slate-800 mx-1" />
             <div>
-              <div className="text-[10px] uppercase font-mono text-slate-400">已安装版本数</div>
+              <div className="text-[10px] uppercase font-mono text-slate-400">检测到的已装版本</div>
               <div className="text-sm font-bold font-mono text-blue-400 mt-0.5">
                 {currentTool.installedVersions.length} 个
               </div>
@@ -186,23 +190,23 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
               <Globe className="w-4 h-4 text-blue-400" />
-              本地已安装版本
+              本机已安装版本 (真实探测)
             </h3>
             <span className="text-xs text-slate-400">
-              点击版本可即时切换全局或卸载
+              真实读取自系统 PATH 及 Mise 本地库
             </span>
           </div>
 
           {currentTool.installedVersions.length === 0 ? (
             <div className="p-8 rounded-2xl bg-slate-900/40 border border-dashed border-slate-800 text-center">
               <ShieldAlert className="w-8 h-8 text-amber-400/80 mx-auto mb-2" />
-              <p className="text-sm font-medium text-slate-300">尚未安装任何 {currentTool.name} 版本</p>
-              <p className="text-xs text-slate-400 mt-1">请在下方远程可用版本库中选择一个版本进行安装</p>
+              <p className="text-sm font-medium text-slate-300">本机尚未安装 {currentTool.name} 或未加入环境变量</p>
+              <p className="text-xs text-slate-400 mt-1">可在下方在线版本仓库中输入版本号进行真实下载安装</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {currentTool.installedVersions.map((ver) => {
-                const isGlobal = currentTool.globalVersion === ver;
+                const isGlobal = currentTool.globalVersion === ver || currentTool.activeVersion === ver;
 
                 return (
                   <div
@@ -218,13 +222,13 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                         <div className="font-mono text-base font-bold text-white flex items-center gap-2">
                           v{ver}
                           {isGlobal && (
-                            <span className="text-[10px] font-sans px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 flex items-center gap-1 font-semibold">
-                              <Check className="w-3 h-3" /> 全局主用
+                            <span className="text-[10px] font-sans px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1 font-semibold">
+                              <Check className="w-3 h-3" /> 当前主用
                             </span>
                           )}
                         </div>
                         <div className="text-[11px] text-slate-400 font-mono mt-1">
-                          ~/.local/share/mise/installs/{currentTool.id}/{ver}
+                          系统真实环境可用
                         </div>
                       </div>
 
@@ -243,11 +247,11 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                           onClick={() => onSetGlobalVersion(currentTool.id, ver)}
                           className="flex-1 px-3 py-1.5 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 text-xs font-semibold transition-all flex items-center justify-center gap-1"
                         >
-                          <Zap className="w-3.5 h-3.5" /> 设为全局主用
+                          <Zap className="w-3.5 h-3.5" /> 切换为主用版本
                         </button>
                       ) : (
                         <div className="text-xs text-emerald-400 font-medium flex items-center gap-1 py-1">
-                          <Check className="w-3.5 h-3.5" /> 当前系统 PATH 正在调用
+                          <Check className="w-3.5 h-3.5" /> 当前终端 PATH 正在调用
                         </div>
                       )}
                     </div>
@@ -266,7 +270,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                 <Download className="w-4 h-4 text-emerald-400" />
                 在线版本仓库 (mise registry)
               </h3>
-              <p className="text-xs text-slate-400">选择官方发布版本一键在线下载与环境激活</p>
+              <p className="text-xs text-slate-400">选择官方发布版本一键在线下载并配置环境</p>
             </div>
 
             {/* Filter tags & Search */}
@@ -307,12 +311,12 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
           <div className="p-3 rounded-xl bg-slate-900/70 border border-slate-800 flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-xs text-slate-300">
               <Terminal className="w-4 h-4 text-slate-400" />
-              <span>自定义安装版本/分支 (如 nightly / 21.0.0-rc1):</span>
+              <span>自定义安装版本/分支 (例如: 22.12.0 / 3.12.7 / latest):</span>
             </div>
             <div className="flex items-center gap-2">
               <input
                 type="text"
-                placeholder="例如: 23.3.0"
+                placeholder="例如: 22.12.0"
                 value={customVersionInput}
                 onChange={(e) => setCustomVersionInput(e.target.value)}
                 className="bg-slate-950 border border-slate-800 text-xs text-white rounded-lg px-3 py-1 font-mono w-32 focus:outline-none focus:border-blue-500"
@@ -327,55 +331,64 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                 }}
                 className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-semibold transition-colors flex items-center gap-1"
               >
-                <Plus className="w-3.5 h-3.5" /> 安装
+                <Plus className="w-3.5 h-3.5" /> 真实安装
               </button>
             </div>
           </div>
 
           {/* Remote Version Table / Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 max-h-72 overflow-y-auto p-1">
-            {availableVersionsFiltered.map((ver) => {
-              const isInstalled = currentTool.installedVersions.includes(ver);
-              const isLts = ver.includes('20.') || ver.includes('18.') || ver.includes('21.') || ver.includes('3.12');
+          {availableVersionsFiltered.length === 0 ? (
+            <div className="p-6 rounded-xl bg-slate-900/30 border border-slate-800/80 text-center">
+              <AlertCircle className="w-6 h-6 text-slate-400 mx-auto mb-2" />
+              <p className="text-xs text-slate-400">
+                暂未从底层 CLI 拉取到远程版本列表。您可以通过上方输入框输入版本号直接执行真实安装。
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 max-h-72 overflow-y-auto p-1">
+              {availableVersionsFiltered.map((ver) => {
+                const isInstalled = currentTool.installedVersions.includes(ver);
+                const isLts = ver.includes('20.') || ver.includes('18.') || ver.includes('21.') || ver.includes('3.12');
 
-              return (
-                <div
-                  key={ver}
-                  className={`p-2.5 rounded-xl border flex flex-col justify-between transition-all ${
-                    isInstalled
-                      ? 'bg-slate-900/30 border-slate-800/80 opacity-70'
-                      : 'bg-slate-900/80 border-slate-800 hover:border-blue-500/40 hover:bg-slate-850'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-xs font-bold text-slate-200">
-                      v{ver}
-                    </span>
-                    {isLts && (
-                      <span className="text-[9px] px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-300 font-semibold">
-                        LTS
+                return (
+                  <div
+                    key={ver}
+                    className={`p-2.5 rounded-xl border flex flex-col justify-between transition-all ${
+                      isInstalled
+                        ? 'bg-slate-900/30 border-slate-800/80 opacity-70'
+                        : 'bg-slate-900/80 border-slate-800 hover:border-blue-500/40 hover:bg-slate-850'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-xs font-bold text-slate-200">
+                        v{ver}
                       </span>
-                    )}
-                  </div>
+                      {isLts && (
+                        <span className="text-[9px] px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-300 font-semibold">
+                          LTS
+                        </span>
+                      )}
+                    </div>
 
-                  <div className="mt-2 pt-2 border-t border-slate-800/60 flex justify-end">
-                    {isInstalled ? (
-                      <span className="text-[10px] text-emerald-400 font-medium flex items-center gap-1">
-                        <Check className="w-3 h-3" /> 已就绪
-                      </span>
-                    ) : (
-                      <button
-                        onClick={() => onOpenInstallModal(currentTool.id, ver)}
-                        className="w-full py-1 rounded-lg bg-slate-800 hover:bg-blue-600 text-slate-300 hover:text-white text-[11px] font-medium transition-colors flex items-center justify-center gap-1"
-                      >
-                        <Download className="w-3 h-3" /> 安装
-                      </button>
-                    )}
+                    <div className="mt-2 pt-2 border-t border-slate-800/60 flex justify-end">
+                      {isInstalled ? (
+                        <span className="text-[10px] text-emerald-400 font-medium flex items-center gap-1">
+                          <Check className="w-3 h-3" /> 已就绪
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => onOpenInstallModal(currentTool.id, ver)}
+                          className="w-full py-1 rounded-lg bg-slate-800 hover:bg-blue-600 text-slate-300 hover:text-white text-[11px] font-medium transition-colors flex items-center justify-center gap-1"
+                        >
+                          <Download className="w-3 h-3" /> 安装
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>

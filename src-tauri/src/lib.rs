@@ -28,6 +28,7 @@ pub fn run() {
             // System commands
             get_system_status,
             get_system_tools,
+            test_system_tool,
             install_system_tool,
             get_health_checks,
             auto_fix_health_check,
@@ -41,6 +42,8 @@ pub fn run() {
             get_projects,
             scan_and_add_project,
             set_project_tool_version,
+            open_in_editor,
+            open_in_terminal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running envhub tauri application");

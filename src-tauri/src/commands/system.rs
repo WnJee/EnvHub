@@ -67,6 +67,17 @@ pub async fn get_system_status() -> Result<SystemStatus, String> {
         if cfg!(windows) { "powershell.exe".to_string() } else { "/bin/zsh".to_string() }
     });
 
+    let mut os_version = format!("{} ({})", os_name, arch);
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(out) = std::process::Command::new("sw_vers").arg("-productVersion").output() {
+            if out.status.success() {
+                let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                os_version = format!("macOS {}", v);
+            }
+        }
+    }
+
     let mise_bin = env_helper::find_mise_binary();
     let mise_installed = mise_bin.is_some();
     let mise_path = mise_bin.as_ref().map(|p| p.to_string_lossy().to_string());
@@ -81,7 +92,11 @@ pub async fn get_system_status() -> Result<SystemStatus, String> {
     }
 
     let pkg_manager = if cfg!(target_os = "macos") {
-        "brew"
+        if std::process::Command::new("brew").arg("--version").output().is_ok() {
+            "brew"
+        } else {
+            "none"
+        }
     } else if cfg!(target_os = "windows") {
         "winget"
     } else {
@@ -90,7 +105,7 @@ pub async fn get_system_status() -> Result<SystemStatus, String> {
 
     Ok(SystemStatus {
         os: os_name.to_string(),
-        os_version: format!("{} ({})", os_name, arch),
+        os_version,
         arch,
         default_shell,
         mise_installed,
@@ -147,16 +162,29 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
             icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/neovim/neovim-original.svg".to_string(),
             homepage: "https://neovim.io".to_string(),
         },
+        SystemTool {
+            id: "ripgrep".to_string(),
+            name: "Ripgrep (rg)".to_string(),
+            description: "基于 Rust 实现的超高速递归文本搜索工具".to_string(),
+            category: "CLI Utility".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install ripgrep".to_string() } else { "winget install BurntSushi.ripgrep.MSVC".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/rust/rust-original.svg".to_string(),
+            homepage: "https://github.com/BurntSushi/ripgrep".to_string(),
+        },
     ];
 
-    // Check installed status
+    // Check installed status and real versions
     for tool in &mut tools {
-        if let Ok(out) = std::process::Command::new(&tool.id).arg("--version").output() {
+        let binary_name = if tool.id == "neovim" { "nvim" } else if tool.id == "ripgrep" { "rg" } else { &tool.id };
+        if let Ok(out) = std::process::Command::new(binary_name).arg("--version").output() {
             if out.status.success() {
                 tool.is_installed = true;
                 let v = String::from_utf8_lossy(&out.stdout);
                 let first_line = v.lines().next().unwrap_or("installed");
-                tool.installed_version = Some(first_line.trim().to_string());
+                let clean_version = first_line.split_whitespace().last().unwrap_or(first_line).trim_start_matches('v');
+                tool.installed_version = Some(clean_version.to_string());
             }
         }
     }
@@ -165,9 +193,30 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
 }
 
 #[tauri::command]
+pub async fn test_system_tool(tool_id: String) -> Result<String, String> {
+    let binary_name = if tool_id == "neovim" { "nvim" } else if tool_id == "ripgrep" { "rg" } else { &tool_id };
+    let output = std::process::Command::new(binary_name)
+        .arg("--version")
+        .output()
+        .map_err(|e| format!("无法执行 {}: {}", binary_name, e))?;
+
+    if output.status.success() {
+        let out_str = String::from_utf8_lossy(&output.stdout);
+        let first_line = out_str.lines().next().unwrap_or("执行正常").trim();
+        Ok(format!("测试成功: {}", first_line))
+    } else {
+        Err("执行返回非零状态码".to_string())
+    }
+}
+
+#[tauri::command]
 pub async fn install_system_tool(tool_id: String) -> Result<bool, String> {
     let cmd = if cfg!(target_os = "macos") {
-        format!("brew install {}", tool_id)
+        if tool_id == "docker" {
+            "brew install --cask docker".to_string()
+        } else {
+            format!("brew install {}", tool_id)
+        }
     } else if cfg!(target_os = "windows") {
         format!("winget install {}", tool_id)
     } else {
@@ -176,12 +225,16 @@ pub async fn install_system_tool(tool_id: String) -> Result<bool, String> {
 
     let status = Command::new("sh")
         .arg("-c")
-        .arg(cmd)
+        .arg(&cmd)
         .status()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("调用系统包管理器失败: {}", e))?;
 
-    Ok(status.success())
+    if !status.success() {
+        return Err(format!("包管理器执行失败，退出码: {:?}", status.code()));
+    }
+
+    Ok(true)
 }
 
 #[tauri::command]
@@ -235,11 +288,11 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
     checks.push(EnvHealthCheck {
         id: "path-priority".to_string(),
         title: "PATH 优先级与 Shims 注入检查".to_string(),
-        status: if has_shims { "ok".to_string() } else { "ok".to_string() },
+        status: if has_shims { "ok".to_string() } else { "warning".to_string() },
         message: if has_shims {
             "mise shims 路径已注入系统 PATH，运行版本劫持正常".to_string()
         } else {
-            "当前系统 PATH 处于正常响应序列".to_string()
+            "未在系统 PATH 中检测到 mise shims，建议在终端中加载环境变量".to_string()
         },
         shell: shell.clone(),
         config_file: "PATH Environment".to_string(),
@@ -247,17 +300,18 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
     });
 
     // 3. Package Manager
+    let has_brew = std::process::Command::new("brew").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
     checks.push(EnvHealthCheck {
         id: "package-manager".to_string(),
         title: "系统包管理器状态".to_string(),
-        status: "ok".to_string(),
-        message: if cfg!(target_os = "macos") {
-            "Homebrew 处于就绪状态，支持自动安装底层 CLI 依赖"
+        status: if has_brew || cfg!(target_os = "windows") { "ok".to_string() } else { "warning".to_string() },
+        message: if has_brew {
+            "Homebrew 处于就绪状态，支持自动安装底层 CLI 依赖".to_string()
         } else if cfg!(target_os = "windows") {
-            "Winget 处于就绪状态"
+            "Winget 处于就绪状态".to_string()
         } else {
-            "APT 处于就绪状态"
-        }.to_string(),
+            "未检测到 Homebrew，部分系统工具需要手动编译安装".to_string()
+        },
         shell: "system".to_string(),
         config_file: "system".to_string(),
         can_auto_fix: false,
@@ -287,10 +341,10 @@ pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
                 .create(true)
                 .append(true)
                 .open(rc_path)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| format!("打开 Shell RC 失败: {}", e))?;
 
             file.write_all(activation_line.as_bytes())
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| format!("写入 Shell RC 失败: {}", e))?;
 
             return Ok(true);
         }

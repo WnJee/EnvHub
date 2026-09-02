@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { SystemTool } from '../types';
 import { 
   Wrench, 
@@ -7,8 +7,11 @@ import {
   ExternalLink, 
   Terminal, 
   PackageCheck, 
-  ShieldCheck
+  ShieldCheck,
+  Loader2
 } from 'lucide-react';
+import { api } from '../services/tauri';
+import { useToast } from './Toast';
 
 interface SystemToolsProps {
   systemTools: SystemTool[];
@@ -21,6 +24,21 @@ export const SystemTools: React.FC<SystemToolsProps> = ({
   packageManager,
   onInstallSystemTool,
 }) => {
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const toast = useToast();
+
+  const handleTestTool = async (toolId: string, toolName: string) => {
+    setTestingId(toolId);
+    try {
+      const output = await api.testSystemTool(toolId);
+      toast.success(output, `${toolName} 测试运行正常`);
+    } catch (err) {
+      toast.error(`测试执行失败: ${err}`, `${toolName} 未响应`);
+    } finally {
+      setTestingId(null);
+    }
+  };
+
   return (
     <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-[#090D16]">
       {/* Top Banner */}
@@ -32,7 +50,7 @@ export const SystemTools: React.FC<SystemToolsProps> = ({
           </div>
           <h2 className="text-xl font-bold text-white mt-1">系统级开发基建与工具箱</h2>
           <p className="text-xs text-slate-400 mt-1 max-w-xl">
-            跨平台自动适配宿主包管理器 (macOS <code className="text-blue-400">Homebrew</code> / Windows <code className="text-blue-400">winget</code> / Linux <code className="text-blue-400">apt</code>)，一键补齐底层编译与辅助工具。
+            跨平台自动适配宿主包管理器 (macOS <code className="text-blue-400">Homebrew</code> / Windows <code className="text-blue-400">winget</code> / Linux <code className="text-blue-400">apt</code>)，真实检测与安装底层依赖。
           </p>
         </div>
 
@@ -85,7 +103,7 @@ export const SystemTools: React.FC<SystemToolsProps> = ({
 
                 {tool.isInstalled ? (
                   <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-semibold flex items-center gap-1">
-                    <Check className="w-3 h-3" /> 已安装
+                    <Check className="w-3 h-3" /> 本机已装
                   </span>
                 ) : (
                   <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-medium">
@@ -110,7 +128,7 @@ export const SystemTools: React.FC<SystemToolsProps> = ({
             {/* Bottom Status / Install Action */}
             <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between">
               {tool.isInstalled ? (
-                <div className="text-xs font-mono text-slate-400 flex items-center gap-1.5">
+                <div className="text-xs font-mono text-slate-300 flex items-center gap-1.5">
                   <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
                   <span>v{tool.installedVersion}</span>
                 </div>
@@ -122,19 +140,25 @@ export const SystemTools: React.FC<SystemToolsProps> = ({
 
               {tool.isInstalled ? (
                 <button
-                  onClick={() => {
-                    alert(`正在终端中测试 ${tool.name} 运行状态... 输出正常！`);
-                  }}
-                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors"
+                  onClick={() => handleTestTool(tool.id, tool.name)}
+                  disabled={testingId === tool.id}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors flex items-center gap-1"
                 >
-                  测试运行
+                  {testingId === tool.id ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" />
+                      <span>测试中...</span>
+                    </>
+                  ) : (
+                    '真实运行测试'
+                  )}
                 </button>
               ) : (
                 <button
                   onClick={() => onInstallSystemTool(tool.id)}
                   className="px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-colors flex items-center gap-1.5"
                 >
-                  <Download className="w-3.5 h-3.5" /> 一键安装
+                  <Download className="w-3.5 h-3.5" /> 一键调用安装
                 </button>
               )}
             </div>
