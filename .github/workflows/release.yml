@@ -2,8 +2,8 @@ name: 'Release EnvHub'
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -40,6 +40,13 @@ jobs:
         with:
           node-version: 22
 
+      - name: Get app version
+        id: get_version
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=v$VERSION" >> $GITHUB_OUTPUT
+
       - name: Install frontend dependencies
         run: npm ci || npm install
 
@@ -48,8 +55,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'EnvHub ${{ github.ref_name }}'
+          tagName: ${{ steps.get_version.outputs.version }}
+          releaseName: 'EnvHub ${{ steps.get_version.outputs.version }}'
           releaseBody: |
             🚀 **EnvHub - 跨平台极速开发环境与版本管理套件**
 
