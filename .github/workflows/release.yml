@@ -1,0 +1,75 @@
+name: 'Release EnvHub'
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            args: '--target aarch64-apple-darwin'
+          - platform: 'macos-latest'
+            args: '--target x86_64-apple-darwin'
+          - platform: 'ubuntu-22.04'
+            args: ''
+          - platform: 'windows-latest'
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Install dependencies (Ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        run: npm ci || npm install
+
+      - name: Build Tauri Desktop Application
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'EnvHub ${{ github.ref_name }}'
+          releaseBody: |
+            🚀 **EnvHub - 跨平台开发环境与版本管理套件**
+
+            ### 📦 下载对应系统安装包：
+            - **macOS (Apple Silicon M1/M2/M3/M4)**: `*aarch64.dmg`
+            - **macOS (Intel)**: `*x86_64.dmg`
+            - **Windows (x64)**: `*.msi` / `*.exe`
+            - **Linux (x64)**: `*.AppImage` / `*.deb`
+
+            ### ✨ 核心功能亮点：
+            - ⚡ **多语言极速管理**：真实探测并管理 Node.js、Python、Go、Rust、Java、Ruby、Bun、Deno、PHP 多版本
+            - 📁 **项目工程环境隔离**：深度支持 `.mise.toml` 与 `.tool-versions`，进入目录秒切版本
+            - 🛠️ **系统工具箱**：跨平台适配 Homebrew / Winget / Apt 底层依赖
+            - 🌐 **国内镜像源高速测速**：真实 TCP 延迟检测，一键写入 NPM / Pip / Cargo / GoProxy 加速
+            - 🩺 **环境健康诊断**：实时排查并一键自动修复终端 Shell RC 与 Shims PATH
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}

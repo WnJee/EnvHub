@@ -8,8 +8,6 @@ import {
   Settings, 
   Cpu
 } from 'lucide-react';
-import { isTauri } from '../services/tauri';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 
 export type TabType = 'runtimes' | 'projects' | 'system-tools' | 'mirrors' | 'env-health' | 'settings';
 
@@ -76,35 +74,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
   ];
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 0) {
-      const target = e.target as HTMLElement;
-      if (!target.closest('button') && !target.closest('input') && !target.closest('a')) {
-        if (isTauri()) {
-          try {
-            getCurrentWindow().startDragging();
-          } catch (_) {}
-        }
-      }
-    }
-  };
-
   return (
     <aside className="w-60 bg-[#0B1120] border-r border-slate-800/80 flex flex-col justify-between shrink-0 select-none">
       {/* Brand Header with macOS Traffic Lights Clearance & Drag Region */}
       <div>
-        {/* Traffic Lights Clearance Header */}
+        {/* Top Traffic Lights Drag Area */}
         <div 
-          className="h-6 w-full shrink-0 drag-region cursor-default" 
+          className="h-6 w-full shrink-0" 
           data-tauri-drag-region
-          onMouseDown={handleMouseDown}
         />
         
         {/* Brand Bar */}
         <div 
-          className="h-13 flex items-center gap-3 px-4 pb-2 border-b border-slate-800/80 drag-region cursor-default" 
+          className="h-13 flex items-center gap-3 px-4 pb-2 border-b border-slate-800/80" 
           data-tauri-drag-region
-          onMouseDown={handleMouseDown}
         >
           <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-400 flex items-center justify-center shadow-lg shadow-blue-500/20 text-white font-bold shrink-0 pointer-events-none">
             <Cpu className="w-4 h-4" />
@@ -121,7 +104,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         {/* Navigation items */}
-        <nav className="p-2.5 space-y-1 no-drag">
+        <nav className="p-2.5 space-y-1">
           <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400 font-mono">
             功能导航
           </div>
@@ -132,7 +115,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 key={item.id}
                 onClick={() => onSelectTab(item.id)}
-                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl transition-all duration-200 group text-left no-drag ${
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl transition-all duration-200 group text-left ${
                   isActive
                     ? 'bg-blue-600/15 border border-blue-500/30 text-white shadow-sm'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent'
@@ -166,10 +149,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Bottom Settings & Status */}
-      <div className="p-2.5 border-t border-slate-800/80 space-y-1.5 no-drag">
+      <div className="p-2.5 border-t border-slate-800/80 space-y-1.5">
         <button
           onClick={() => onSelectTab('settings')}
-          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl transition-all duration-200 text-left no-drag ${
+          className={`w-full flex items-center justify-between px-3 py-2 rounded-xl transition-all duration-200 text-left ${
             currentTab === 'settings'
               ? 'bg-blue-600/15 border border-blue-500/30 text-white shadow-sm'
               : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 border border-transparent'

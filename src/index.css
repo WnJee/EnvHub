@@ -24,15 +24,6 @@ code, pre, .font-mono {
   font-family: 'JetBrains Mono', monospace;
 }
 
-/* Window Drag Regions for macOS Overlay */
-.drag-region, [data-tauri-drag-region] {
-  -webkit-app-region: drag;
-}
-
-.no-drag, button, input, select, textarea, a, [role="button"] {
-  -webkit-app-region: no-drag;
-}
-
 /* Custom Scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
