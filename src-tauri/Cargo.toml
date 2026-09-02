@@ -1,0 +1,26 @@
+[package]
+name = "envhub"
+version = "0.1.0"
+description = "EnvHub - Cross-platform Development Environment and Runtime Manager"
+authors = ["EnvHub Team"]
+edition = "2021"
+
+[lib]
+name = "envhub_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0.0", features = [] }
+tauri-plugin-shell = "2.0.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+dirs = "5.0"
+regex = "1.10"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
