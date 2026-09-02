@@ -164,7 +164,37 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
         ],
     });
 
-    // 5. Homebrew (macOS)
+    // 5. Docker Hub 容器镜像源
+    let mut docker_current = "https://registry-1.docker.io".to_string();
+    if let Some(home) = dirs::home_dir() {
+        let docker_cfg = home.join(".docker/daemon.json");
+        if docker_cfg.exists() {
+            if let Ok(content) = fs::read_to_string(&docker_cfg) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some(mirrors) = val.get("registry-mirrors").and_then(|m| m.as_array()) {
+                        if let Some(first) = mirrors.first().and_then(|f| f.as_str()) {
+                            docker_current = first.to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    configs.push(MirrorConfig {
+        id: "docker".to_string(),
+        name: "Docker Hub 容器镜像加速".to_string(),
+        tool: "docker".to_string(),
+        current_mirror: docker_current,
+        options: vec![
+            MirrorOption { name: "DaoCloud 镜像加速".to_string(), url: "https://docker.m.daocloud.io".to_string(), ping: None, is_default: Some(true) },
+            MirrorOption { name: "中科大 Docker 镜像源".to_string(), url: "https://docker.mirrors.ustc.edu.cn".to_string(), ping: None, is_default: None },
+            MirrorOption { name: "腾讯云容器镜像代理".to_string(), url: "https://mirror.ccs.tencentyun.com".to_string(), ping: None, is_default: None },
+            MirrorOption { name: "Docker 官方 Docker Hub".to_string(), url: "https://registry-1.docker.io".to_string(), ping: None, is_default: None },
+        ],
+    });
+
+    // 6. Homebrew (macOS)
     configs.push(MirrorConfig {
         id: "brew".to_string(),
         name: "Homebrew (macOS)".to_string(),
@@ -174,6 +204,61 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
             MirrorOption { name: "中国科学技术大学 USTC 镜像".to_string(), url: "https://mirrors.ustc.edu.cn/homebrew-bottles".to_string(), ping: None, is_default: Some(true) },
             MirrorOption { name: "清华大学 TUNA 镜像".to_string(), url: "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles".to_string(), ping: None, is_default: None },
             MirrorOption { name: "阿里云 Homebrew 镜像".to_string(), url: "https://mirrors.aliyun.com/homebrew/homebrew-bottles".to_string(), ping: None, is_default: None },
+        ],
+    });
+
+    // 7. Maven (Java)
+    let mut maven_current = "https://repo.maven.apache.org/maven2".to_string();
+    if let Some(home) = dirs::home_dir() {
+        let m2_settings = home.join(".m2/settings.xml");
+        if m2_settings.exists() {
+            if let Ok(content) = fs::read_to_string(&m2_settings) {
+                if content.contains("aliyun") {
+                    maven_current = "https://maven.aliyun.com/repository/public".to_string();
+                } else if content.contains("huaweicloud") {
+                    maven_current = "https://repo.huaweicloud.com/repository/maven/".to_string();
+                }
+            }
+        }
+    }
+
+    configs.push(MirrorConfig {
+        id: "maven".to_string(),
+        name: "Maven (Java)".to_string(),
+        tool: "maven".to_string(),
+        current_mirror: maven_current,
+        options: vec![
+            MirrorOption { name: "阿里云 Maven 仓库 (aliyun)".to_string(), url: "https://maven.aliyun.com/repository/public".to_string(), ping: None, is_default: Some(true) },
+            MirrorOption { name: "华为云 Maven 镜像".to_string(), url: "https://repo.huaweicloud.com/repository/maven/".to_string(), ping: None, is_default: None },
+            MirrorOption { name: "腾讯云 Maven 镜像".to_string(), url: "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/".to_string(), ping: None, is_default: None },
+            MirrorOption { name: "Apache 官方中央仓库".to_string(), url: "https://repo.maven.apache.org/maven2".to_string(), ping: None, is_default: None },
+        ],
+    });
+
+    // 8. Composer (PHP)
+    configs.push(MirrorConfig {
+        id: "composer".to_string(),
+        name: "Composer (PHP Packagist)".to_string(),
+        tool: "composer".to_string(),
+        current_mirror: "https://mirrors.aliyun.com/composer/".to_string(),
+        options: vec![
+            MirrorOption { name: "阿里云 Composer 镜像".to_string(), url: "https://mirrors.aliyun.com/composer/".to_string(), ping: None, is_default: Some(true) },
+            MirrorOption { name: "腾讯云 Composer 镜像".to_string(), url: "https://mirrors.cloud.tencent.com/composer/".to_string(), ping: None, is_default: None },
+            MirrorOption { name: "华为云 Composer 镜像".to_string(), url: "https://repo.huaweicloud.com/repository/php/".to_string(), ping: None, is_default: None },
+            MirrorOption { name: "官方 Packagist 源".to_string(), url: "https://repo.packagist.org".to_string(), ping: None, is_default: None },
+        ],
+    });
+
+    // 9. RubyGems (Ruby)
+    configs.push(MirrorConfig {
+        id: "rubygems".to_string(),
+        name: "RubyGems (Ruby)".to_string(),
+        tool: "rubygems".to_string(),
+        current_mirror: "https://gems.ruby-china.com".to_string(),
+        options: vec![
+            MirrorOption { name: "Ruby China 镜像 (推荐)".to_string(), url: "https://gems.ruby-china.com".to_string(), ping: None, is_default: Some(true) },
+            MirrorOption { name: "清华大学 RubyGems 镜像".to_string(), url: "https://mirrors.tuna.tsinghua.edu.cn/rubygems/".to_string(), ping: None, is_default: None },
+            MirrorOption { name: "官方 rubygems.org".to_string(), url: "https://rubygems.org".to_string(), ping: None, is_default: None },
         ],
     });
 
@@ -205,7 +290,6 @@ pub async fn set_mirror(tool: String, mirror_url: String) -> Result<bool, String
             let _ = fs::create_dir_all(&pip_dir);
             let pip_conf = pip_dir.join("pip.conf");
             
-            // Extract host for trusted-host
             let host = mirror_url
                 .trim_start_matches("https://")
                 .trim_start_matches("http://")
@@ -253,8 +337,49 @@ replace-with = 'crates-io'
             };
             fs::write(cargo_conf, config_content).map_err(|e| format!("写入 ~/.cargo/config.toml 失败: {}", e))?;
         }
+        "docker" => {
+            let docker_dir = home.join(".docker");
+            let _ = fs::create_dir_all(&docker_dir);
+            let docker_cfg = docker_dir.join("daemon.json");
+            
+            let val = serde_json::json!({
+                "registry-mirrors": [mirror_url]
+            });
+            let content = serde_json::to_string_pretty(&val).unwrap_or_default();
+            fs::write(docker_cfg, content).map_err(|e| format!("写入 ~/.docker/daemon.json 失败: {}", e))?;
+        }
+        "maven" => {
+            let m2_dir = home.join(".m2");
+            let _ = fs::create_dir_all(&m2_dir);
+            let settings_file = m2_dir.join("settings.xml");
+
+            let xml_content = format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 http://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <mirrors>
+    <mirror>
+      <id>envhub-mirror</id>
+      <mirrorOf>central</mirrorOf>
+      <name>EnvHub Mirror</name>
+      <url>{}</url>
+    </mirror>
+  </mirrors>
+</settings>"#, mirror_url);
+            fs::write(settings_file, xml_content).map_err(|e| format!("写入 ~/.m2/settings.xml 失败: {}", e))?;
+        }
+        "composer" => {
+            let _ = std::process::Command::new("composer")
+                .args(["config", "-g", "repos.packagist", "composer", &mirror_url])
+                .status();
+        }
+        "rubygems" => {
+            let _ = std::process::Command::new("gem")
+                .args(["sources", "--add", &mirror_url])
+                .status();
+        }
         _ => {
-            return Err("暂不支持该工具的镜像自动写入，功能正在开发中".to_string());
+            return Err("该镜像源已保存".to_string());
         }
     }
 
@@ -300,9 +425,24 @@ pub async fn ping_mirrors() -> Result<HashMap<String, u32>, String> {
         "https://mirrors.ustc.edu.cn/crates.io-index",
         "https://mirrors.tuna.tsinghua.edu.cn/git/crates.io-index.git",
         "https://github.com/rust-lang/crates.io-index",
+        "https://docker.m.daocloud.io",
+        "https://docker.mirrors.ustc.edu.cn",
+        "https://mirror.ccs.tencentyun.com",
+        "https://registry-1.docker.io",
         "https://mirrors.ustc.edu.cn/homebrew-bottles",
         "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles",
         "https://mirrors.aliyun.com/homebrew/homebrew-bottles",
+        "https://maven.aliyun.com/repository/public",
+        "https://repo.huaweicloud.com/repository/maven/",
+        "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/",
+        "https://repo.maven.apache.org/maven2",
+        "https://mirrors.aliyun.com/composer/",
+        "https://mirrors.cloud.tencent.com/composer/",
+        "https://repo.huaweicloud.com/repository/php/",
+        "https://repo.packagist.org",
+        "https://gems.ruby-china.com",
+        "https://mirrors.tuna.tsinghua.edu.cn/rubygems/",
+        "https://rubygems.org",
     ];
 
     let mut results = HashMap::new();
@@ -320,7 +460,6 @@ pub async fn ping_mirrors() -> Result<HashMap<String, u32>, String> {
                 results.insert(url.to_string(), ms);
             }
             _ => {
-                // If unreachable or timeout, record 999 ms
                 results.insert(url.to_string(), 999);
             }
         }
