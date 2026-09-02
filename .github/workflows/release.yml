@@ -5,6 +5,11 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release Tag (e.g. v0.1.0)'
+        required: false
+        default: 'v0.1.0'
 
 jobs:
   release:
@@ -37,7 +42,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libayatana-appindicator3-dev
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -53,10 +58,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'EnvHub ${{ github.ref_name }}'
+          tagName: ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || 'v0.1.0' }}
+          releaseName: 'EnvHub ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || 'v0.1.0' }}'
           releaseBody: |
-            🚀 **EnvHub - 跨平台开发环境与版本管理套件**
+            🚀 **EnvHub - 跨平台极速开发环境与版本管理套件**
 
             ### 📦 下载对应系统安装包：
             - **macOS (Apple Silicon M1/M2/M3/M4)**: `*aarch64.dmg`
