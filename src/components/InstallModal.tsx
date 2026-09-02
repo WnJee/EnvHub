@@ -6,8 +6,10 @@ import {
   Copy, 
   X, 
   Loader2,
-  Zap
+  Zap,
+  ArrowDownCircle
 } from 'lucide-react';
+import { useToast } from './Toast';
 
 interface InstallModalProps {
   isOpen: boolean;
@@ -31,6 +33,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
   onSetGlobal,
 }) => {
   const terminalEndRef = useRef<HTMLDivElement>(null);
+  const toast = useToast();
 
   useEffect(() => {
     if (terminalEndRef.current) {
@@ -42,16 +45,25 @@ export const InstallModal: React.FC<InstallModalProps> = ({
 
   const copyLogs = () => {
     navigator.clipboard.writeText(logs.join('\n'));
-    alert('已复制全部安装日志到剪贴板！');
+    toast.success('已复制安装日志到剪贴板');
+  };
+
+  const getStageText = () => {
+    if (status === 'completed') return '安装完成，环境已就绪';
+    if (status === 'failed') return '安装未完成';
+    if (progress < 25) return '正在连接镜像源并解析版本...';
+    if (progress < 60) return '正在下载官方资源包...';
+    if (progress < 85) return '正在校验完整性与解压...';
+    return '正在配置环境变量与 Shims...';
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-200">
       <div className="w-full max-w-2xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-150">
         {/* Header */}
         <div className="p-4 border-b border-slate-800 bg-[#0B1120] flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className={`p-2 rounded-xl ${
+            <div className={`p-2 rounded-xl shrink-0 ${
               status === 'completed'
                 ? 'bg-emerald-500/20 text-emerald-400'
                 : status === 'failed'
@@ -71,10 +83,10 @@ export const InstallModal: React.FC<InstallModalProps> = ({
                 正在安装 {toolId.toUpperCase()}
                 <span className="font-mono text-blue-400">v{version}</span>
               </h3>
-              <p className="text-xs text-slate-400">
-                {status === 'running' && '异步流式捕获下载与编译进度，UI 保持流畅响应'}
-                {status === 'completed' && '安装成功！运行时已编译解压就绪'}
-                {status === 'failed' && '安装过程遇到错误，请查看终端输出'}
+              <p className="text-xs text-slate-400 mt-0.5">
+                {status === 'running' && '正在下载并部署开发环境...'}
+                {status === 'completed' && '安装成功！环境已配置就绪'}
+                {status === 'failed' && '安装未完成，请查看下方详细日志'}
               </p>
             </div>
           </div>
@@ -88,27 +100,34 @@ export const InstallModal: React.FC<InstallModalProps> = ({
           </button>
         </div>
 
-        {/* Progress bar */}
-        <div className="p-4 bg-slate-950/60 border-b border-slate-800 space-y-1.5">
-          <div className="flex justify-between text-xs font-mono">
-            <span className="text-slate-400">
-              {status === 'running' && '下载 & 校验 & 释放 Shims...'}
-              {status === 'completed' && '完成 100%'}
-              {status === 'failed' && '已终止'}
+        {/* Dynamic Progress Bar */}
+        <div className="p-4 bg-slate-950/70 border-b border-slate-800 space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2">
+              <ArrowDownCircle className={`w-3.5 h-3.5 ${status === 'running' ? 'text-blue-400 animate-bounce' : 'text-slate-400'}`} />
+              <span className="text-slate-300 font-medium">{getStageText()}</span>
+            </div>
+            <span className="font-mono font-bold text-blue-400 text-xs px-2 py-0.5 rounded-md bg-blue-500/10 border border-blue-500/20">
+              {progress}%
             </span>
-            <span className="font-bold text-blue-400">{progress}%</span>
           </div>
-          <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden">
+
+          {/* Progress Track */}
+          <div className="w-full bg-slate-800/80 h-2.5 rounded-full overflow-hidden p-0.5 border border-slate-700/50">
             <div
-              className={`h-full transition-all duration-300 ${
+              className={`h-full rounded-full transition-all duration-300 relative ${
                 status === 'completed'
-                  ? 'bg-emerald-500'
+                  ? 'bg-emerald-500 shadow-sm shadow-emerald-500/50'
                   : status === 'failed'
                   ? 'bg-rose-500'
-                  : 'bg-gradient-to-r from-blue-500 to-cyan-400'
+                  : 'bg-gradient-to-r from-blue-600 via-indigo-500 to-cyan-400 shadow-sm shadow-cyan-500/30'
               }`}
-              style={{ width: `${progress}%` }}
-            />
+              style={{ width: `${Math.max(5, progress)}%` }}
+            >
+              {status === 'running' && (
+                <div className="absolute inset-0 bg-white/20 animate-pulse" />
+              )}
+            </div>
           </div>
         </div>
 
@@ -117,7 +136,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
           <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800/80 text-[11px] text-slate-400">
             <div className="flex items-center gap-1.5">
               <Terminal className="w-3.5 h-3.5 text-blue-400" />
-              <span>mise subprocess live stream</span>
+              <span>安装日志输出</span>
             </div>
             <button
               onClick={copyLogs}
@@ -130,17 +149,17 @@ export const InstallModal: React.FC<InstallModalProps> = ({
 
           <div className="flex-1 overflow-y-auto space-y-1 select-text">
             {logs.map((log, index) => {
-              const isError = log.includes('error') || log.includes('Error') || log.includes('failed');
-              const isSuccess = log.includes('Successfully') || log.includes('completed') || log.includes('matched');
+              const isError = log.includes('error') || log.includes('Error') || log.includes('failed') || log.includes('✗');
+              const isSuccess = log.includes('Successfully') || log.includes('completed') || log.includes('成功') || log.includes('✓');
               return (
                 <div
                   key={index}
-                  className={`leading-relaxed ${
+                  className={`leading-relaxed break-all ${
                     isError
                       ? 'text-rose-400 font-semibold'
                       : isSuccess
                       ? 'text-emerald-400 font-semibold'
-                      : log.startsWith('[download]')
+                      : log.startsWith('[download]') || log.includes('GET ')
                       ? 'text-cyan-300'
                       : 'text-slate-300'
                   }`}
@@ -157,12 +176,12 @@ export const InstallModal: React.FC<InstallModalProps> = ({
         <div className="p-4 bg-[#0B1120] border-t border-slate-800 flex items-center justify-between">
           <div className="text-xs text-slate-400">
             {status === 'running' ? (
-              <span className="flex items-center gap-2 text-blue-400 font-mono">
+              <span className="flex items-center gap-2 text-blue-400 font-medium">
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                后台子进程运行中...
+                正在安装中，请稍候...
               </span>
             ) : status === 'completed' ? (
-              <span className="text-emerald-400 font-medium">✓ 已就绪，可立即开始开发</span>
+              <span className="text-emerald-400 font-medium">✓ 已完成安装，可立即使用</span>
             ) : (
               <span className="text-slate-400">可关闭窗口或重试</span>
             )}
@@ -175,17 +194,17 @@ export const InstallModal: React.FC<InstallModalProps> = ({
                   onSetGlobal();
                   onClose();
                 }}
-                className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-colors flex items-center gap-1.5"
+                className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-colors flex items-center gap-1.5"
               >
-                <Zap className="w-3.5 h-3.5" /> 设为系统全局主用
+                <Zap className="w-3.5 h-3.5" /> 设为全局主用
               </button>
             )}
             <button
               onClick={onClose}
               disabled={status === 'running'}
-              className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-colors disabled:opacity-40"
+              className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-colors disabled:opacity-40"
             >
-              {status === 'completed' ? '完成并关闭' : '关闭'}
+              {status === 'completed' ? '完成' : '关闭'}
             </button>
           </div>
         </div>

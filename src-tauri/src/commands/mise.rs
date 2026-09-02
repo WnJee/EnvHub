@@ -362,11 +362,23 @@ pub async fn install_runtime_version(
         tokio::spawn(async move {
             let mut progress = 15;
             while let Ok(Some(line)) = lines.next_line().await {
-                let _ = app_clone.emit("install-log", line);
-                if progress < 90 {
-                    progress += 5;
-                    let _ = app_clone.emit("install-progress", progress);
+                let _ = app_clone.emit("install-log", line.clone());
+                
+                let lower = line.to_lowercase();
+                if lower.contains("download") || lower.contains("get ") {
+                    progress = progress.max(35);
+                } else if lower.contains("200 ok") || lower.contains("downloaded") {
+                    progress = progress.max(65);
+                } else if lower.contains("verify") || lower.contains("checksum") {
+                    progress = progress.max(78);
+                } else if lower.contains("extract") || lower.contains("install") {
+                    progress = progress.max(88);
+                } else if lower.contains("installed") || lower.contains("complete") {
+                    progress = 98;
+                } else if progress < 90 {
+                    progress += 3;
                 }
+                let _ = app_clone.emit("install-progress", progress);
             }
         });
     }
@@ -376,8 +388,21 @@ pub async fn install_runtime_version(
         let reader = BufReader::new(stderr);
         let mut lines = reader.lines();
         tokio::spawn(async move {
+            let mut progress = 20;
             while let Ok(Some(line)) = lines.next_line().await {
-                let _ = app_clone2.emit("install-log", format!("[INFO] {}", line));
+                let _ = app_clone2.emit("install-log", line.clone());
+                
+                let lower = line.to_lowercase();
+                if lower.contains("download") || lower.contains("get ") {
+                    progress = progress.max(40);
+                } else if lower.contains("200 ok") || lower.contains("downloaded") {
+                    progress = progress.max(70);
+                } else if lower.contains("extract") || lower.contains("install") {
+                    progress = progress.max(88);
+                } else if progress < 90 {
+                    progress += 2;
+                }
+                let _ = app_clone2.emit("install-progress", progress);
             }
         });
     }
