@@ -109,14 +109,13 @@ export const SystemTools: React.FC<SystemToolsProps> = ({
                           {tool.category}
                         </span>
                       </h3>
-                      <a
-                        href={tool.homepage}
-                        target="_blank"
-                        rel="noreferrer"
+                      <button
+                        onClick={() => api.openUrl(tool.homepage)}
                         className="text-[10px] text-slate-400 hover:text-blue-400 flex items-center gap-1 transition-colors mt-0.5"
+                        title="打开官方网站"
                       >
                         官网 <ExternalLink className="w-2.5 h-2.5" />
-                      </a>
+                      </button>
                     </div>
                   </div>
 

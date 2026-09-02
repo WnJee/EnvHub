@@ -283,14 +283,13 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
             <div className="min-w-0">
               <div className="flex items-center gap-2.5">
                 <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">{currentTool.name}</h2>
-                <a
-                  href={currentTool.officialSite}
-                  target="_blank"
-                  rel="noreferrer"
+                <button
+                  onClick={() => api.openUrl(currentTool.officialSite)}
                   className="text-xs text-slate-400 hover:text-blue-400 flex items-center gap-1 transition-colors"
+                  title="打开官方网站"
                 >
                   官网文档 <ExternalLink className="w-3 h-3" />
-                </a>
+                </button>
               </div>
               <p className="text-xs text-slate-400 mt-0.5 truncate max-w-lg">{currentTool.description}</p>
             </div>

@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useToast } from './Toast';
 import { CURRENT_APP_VERSION } from '../services/updater';
+import { api } from '../services/tauri';
 
 interface SettingsModalProps {
   systemStatus: SystemStatus;
@@ -100,15 +101,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               )}
               <span>{isCheckingUpdate ? '正在检查...' : '主动检查更新'}</span>
             </button>
-            <a
-              href="https://github.com/WnJee/EnvHub/releases"
-              target="_blank"
-              rel="noreferrer"
+            <button
+              onClick={() => api.openUrl('https://github.com/WnJee/EnvHub/releases')}
               className="p-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white transition-colors"
               title="前往 GitHub Releases"
             >
               <ExternalLink className="w-4 h-4" />
-            </a>
+            </button>
           </div>
         </div>
 

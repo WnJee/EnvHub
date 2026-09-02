@@ -8,7 +8,7 @@ export interface UpdateInfo {
   downloadUrl?: string;
 }
 
-export const CURRENT_APP_VERSION = '0.2.2';
+export const CURRENT_APP_VERSION = '0.2.3';
 
 /**
  * Compare two semver strings (e.g. "0.1.1" vs "0.1.0")
@@ -50,12 +50,30 @@ export async function checkForUpdates(currentVersion: string = CURRENT_APP_VERSI
 
     const hasUpdate = compareVersions(latestVer, currentVersion) > 0;
 
-    // Pick DMG or appropriate download asset if present
-    let downloadUrl = data.html_url;
+    // Pick OS specific download asset
+    let downloadUrl = `https://github.com/WnJee/EnvHub/releases/download/v${latestVer}/EnvHub_${latestVer}_universal.dmg`;
+
+    const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent.toLowerCase() : '';
+    const isWindows = userAgent.includes('win');
+    const isLinux = userAgent.includes('linux');
+
+    if (isWindows) {
+      downloadUrl = `https://github.com/WnJee/EnvHub/releases/download/v${latestVer}/EnvHub_${latestVer}_x64-setup.exe`;
+    } else if (isLinux) {
+      downloadUrl = `https://github.com/WnJee/EnvHub/releases/download/v${latestVer}/EnvHub_${latestVer}_amd64.AppImage`;
+    }
+
     if (data.assets && Array.isArray(data.assets) && data.assets.length > 0) {
-      const dmgAsset = data.assets.find((a: { name: string; browser_download_url: string }) => a.name.endsWith('.dmg'));
-      if (dmgAsset) {
-        downloadUrl = dmgAsset.browser_download_url;
+      if (isWindows) {
+        const winAsset = data.assets.find((a: { name: string }) => a.name.endsWith('.exe') || a.name.endsWith('.msi'));
+        if (winAsset) downloadUrl = winAsset.browser_download_url;
+      } else if (isLinux) {
+        const linuxAsset = data.assets.find((a: { name: string }) => a.name.endsWith('.AppImage') || a.name.endsWith('.deb'));
+        if (linuxAsset) downloadUrl = linuxAsset.browser_download_url;
+      } else {
+        // macOS default
+        const macAsset = data.assets.find((a: { name: string }) => a.name.endsWith('.dmg'));
+        if (macAsset) downloadUrl = macAsset.browser_download_url;
       }
     }
 

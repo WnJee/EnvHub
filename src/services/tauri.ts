@@ -249,5 +249,66 @@ export const api = {
       return await invoke<boolean>('bootstrap_mise_cli');
     }
     throw new Error('桌面原生环境不可用');
+  },
+
+  // Open URL in system default browser
+  async openUrl(url: string): Promise<boolean> {
+    if (isTauri()) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        return await invoke<boolean>('open_url_in_browser', { url });
+      } catch (err) {
+        console.warn('open_url_in_browser invoke error:', err);
+      }
+    }
+    window.open(url, '_blank');
+    return true;
+  },
+
+  // Open Path in Finder / Explorer
+  async openPathInFileManager(path: string): Promise<boolean> {
+    if (isTauri()) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke<boolean>('open_path_in_file_manager', { path });
+    }
+    return true;
+  },
+
+  // Open installer file
+  async openInstallerFile(path: string): Promise<boolean> {
+    if (isTauri()) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke<boolean>('open_installer_file', { path });
+    }
+    return true;
+  },
+
+  // In-App Download and Launch Update Package
+  async downloadAndInstallUpdate(
+    downloadUrl: string,
+    version: string,
+    onProgress: (percent: number) => void
+  ): Promise<string> {
+    if (isTauri()) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const { listen } = await import('@tauri-apps/api/event');
+
+      const unlisten = await listen<number>('update-download-progress', (event) => {
+        onProgress(event.payload);
+      });
+
+      try {
+        const destPath = await invoke<string>('download_and_install_update', {
+          downloadUrl,
+          version
+        });
+        unlisten();
+        return destPath;
+      } catch (err) {
+        unlisten();
+        throw err;
+      }
+    }
+    throw new Error('请在桌面端运行以执行下载更新');
   }
 };

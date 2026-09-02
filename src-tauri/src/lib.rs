@@ -6,6 +6,7 @@ use commands::{
     system::*,
     mirrors::*,
     projects::*,
+    updater::*,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -46,6 +47,12 @@ pub fn run() {
             set_project_tool_version,
             open_in_editor,
             open_in_terminal,
+
+            // Updater & Browser commands
+            open_url_in_browser,
+            download_and_install_update,
+            open_path_in_file_manager,
+            open_installer_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running envhub tauri application");
