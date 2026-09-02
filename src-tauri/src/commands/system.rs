@@ -121,7 +121,7 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
         SystemTool {
             id: "git".to_string(),
             name: "Git".to_string(),
-            description: "分布式版本控制系统，全球开发者必备基建".to_string(),
+            description: "全球最主流的代码版本管理与协作工具".to_string(),
             category: "VCS".to_string(),
             is_installed: false,
             installed_version: None,
@@ -132,13 +132,178 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
         SystemTool {
             id: "docker".to_string(),
             name: "Docker CLI".to_string(),
-            description: "轻量级容器引擎与虚拟化工具".to_string(),
+            description: "轻量级应用容器化引擎与开发环境虚拟化基建".to_string(),
             category: "Container".to_string(),
             is_installed: false,
             installed_version: None,
             install_command: if cfg!(target_os = "macos") { "brew install --cask docker".to_string() } else { "winget install Docker.DockerDesktop".to_string() },
             icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/docker/docker-original.svg".to_string(),
             homepage: "https://www.docker.com".to_string(),
+        },
+        SystemTool {
+            id: "docker-compose".to_string(),
+            name: "Docker Compose".to_string(),
+            description: "定义和运行多容器 Docker 应用程序的统一编排工具".to_string(),
+            category: "Container".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install docker-compose".to_string() } else { "winget install Docker.DockerCompose".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/docker/docker-original.svg".to_string(),
+            homepage: "https://docs.docker.com/compose/".to_string(),
+        },
+        SystemTool {
+            id: "nginx".to_string(),
+            name: "Nginx".to_string(),
+            description: "高性能 HTTP 和反向代理 Web 服务器，负载均衡利器".to_string(),
+            category: "Server".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install nginx".to_string() } else { "winget install Nginx.Nginx".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/nginx/nginx-original.svg".to_string(),
+            homepage: "https://nginx.org".to_string(),
+        },
+        SystemTool {
+            id: "redis".to_string(),
+            name: "Redis".to_string(),
+            description: "超高速开源内存键值数据库与高性能消息缓存中间件".to_string(),
+            category: "Database".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install redis".to_string() } else { "winget install Redis.Redis".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/redis/redis-original.svg".to_string(),
+            homepage: "https://redis.io".to_string(),
+        },
+        SystemTool {
+            id: "mysql".to_string(),
+            name: "MySQL".to_string(),
+            description: "全球最广泛使用的开源关系型数据库管理系统".to_string(),
+            category: "Database".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install mysql".to_string() } else { "winget install Oracle.MySQL".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/mysql/mysql-original.svg".to_string(),
+            homepage: "https://www.mysql.com".to_string(),
+        },
+        SystemTool {
+            id: "postgresql".to_string(),
+            name: "PostgreSQL".to_string(),
+            description: "强大、高度可扩展且功能完备的企业级开源对象关系型数据库".to_string(),
+            category: "Database".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install postgresql@16".to_string() } else { "winget install PostgreSQL.PostgreSQL".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/postgresql/postgresql-original.svg".to_string(),
+            homepage: "https://www.postgresql.org".to_string(),
+        },
+        SystemTool {
+            id: "mongodb".to_string(),
+            name: "MongoDB".to_string(),
+            description: "面向文档的现代化 NoSQL 高性能高可用数据库".to_string(),
+            category: "Database".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install mongodb-community".to_string() } else { "winget install MongoDB.Server".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/mongodb/mongodb-original.svg".to_string(),
+            homepage: "https://www.mongodb.com".to_string(),
+        },
+        SystemTool {
+            id: "ollama".to_string(),
+            name: "Ollama".to_string(),
+            description: "本地极速运行开源大语言模型 (DeepSeek, Llama 3, Qwen) 的轻量级引擎".to_string(),
+            category: "AI & ML".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install --cask ollama".to_string() } else { "winget install Ollama.Ollama".to_string() },
+            icon: "https://ollama.com/public/ollama.png".to_string(),
+            homepage: "https://ollama.com".to_string(),
+        },
+        SystemTool {
+            id: "gh".to_string(),
+            name: "GitHub CLI (gh)".to_string(),
+            description: "GitHub 官方命令行工具，直接在终端管理 PR、Issue 与 Actions".to_string(),
+            category: "CLI Utility".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install gh".to_string() } else { "winget install GitHub.cli".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/github/github-original.svg".to_string(),
+            homepage: "https://cli.github.com".to_string(),
+        },
+        SystemTool {
+            id: "ripgrep".to_string(),
+            name: "Ripgrep (rg)".to_string(),
+            description: "基于 Rust 实现的超高速递归代码全文搜索工具".to_string(),
+            category: "Search".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install ripgrep".to_string() } else { "winget install BurntSushi.ripgrep.MSVC".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/rust/rust-original.svg".to_string(),
+            homepage: "https://github.com/BurntSushi/ripgrep".to_string(),
+        },
+        SystemTool {
+            id: "fd".to_string(),
+            name: "FD (fd-find)".to_string(),
+            description: "现代化极速文件搜索工具，人性化语法替代传统 find".to_string(),
+            category: "Search".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install fd".to_string() } else { "winget install sharkdp.fd".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/rust/rust-original.svg".to_string(),
+            homepage: "https://github.com/sharkdp/fd".to_string(),
+        },
+        SystemTool {
+            id: "lazygit".to_string(),
+            name: "LazyGit".to_string(),
+            description: "极速全键盘操作的终端可视化 Git 分支与提交管理面板".to_string(),
+            category: "VCS".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install lazygit".to_string() } else { "winget install JesseDuffield.lazygit".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/git/git-original.svg".to_string(),
+            homepage: "https://github.com/jesseduffield/lazygit".to_string(),
+        },
+        SystemTool {
+            id: "bat".to_string(),
+            name: "Bat".to_string(),
+            description: "支持代码语法高亮与 Git 变动集成的现代化 cat 替代神器".to_string(),
+            category: "CLI Utility".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install bat".to_string() } else { "winget install sharkdp.bat".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/rust/rust-original.svg".to_string(),
+            homepage: "https://github.com/sharkdp/bat".to_string(),
+        },
+        SystemTool {
+            id: "fzf".to_string(),
+            name: "FZF".to_string(),
+            description: "通用终端交互式模糊搜索神器，快速检索命令历史与文件".to_string(),
+            category: "CLI Utility".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install fzf".to_string() } else { "winget install junegunn.fzf".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/go/go-original.svg".to_string(),
+            homepage: "https://github.com/junegunn/fzf".to_string(),
+        },
+        SystemTool {
+            id: "zoxide".to_string(),
+            name: "Zoxide (z)".to_string(),
+            description: "深度记忆目录权重的智能终端秒速跳转工具（替代 cd）".to_string(),
+            category: "CLI Utility".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install zoxide".to_string() } else { "winget install ajeetdsouza.zoxide".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/rust/rust-original.svg".to_string(),
+            homepage: "https://github.com/ajeetdsouza/zoxide".to_string(),
+        },
+        SystemTool {
+            id: "ffmpeg".to_string(),
+            name: "FFmpeg".to_string(),
+            description: "领先的跨平台音视频编解码、转码与多媒体流处理框架".to_string(),
+            category: "Media".to_string(),
+            is_installed: false,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install ffmpeg".to_string() } else { "winget install Gyan.FFmpeg".to_string() },
+            icon: "https://ffmpeg.org/favicon.ico".to_string(),
+            homepage: "https://ffmpeg.org".to_string(),
         },
         SystemTool {
             id: "cmake".to_string(),
@@ -153,8 +318,8 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
         },
         SystemTool {
             id: "neovim".to_string(),
-            name: "Neovim".to_string(),
-            description: "可高度定制化、支持 Lua 插件生态的下一代终端文本编辑器".to_string(),
+            name: "Neovim (nvim)".to_string(),
+            description: "可高度定制化、支持 Lua 插件生态的下一代现代化终端编辑器".to_string(),
             category: "Editor".to_string(),
             is_installed: false,
             installed_version: None,
@@ -162,34 +327,89 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
             icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/neovim/neovim-original.svg".to_string(),
             homepage: "https://neovim.io".to_string(),
         },
-        SystemTool {
-            id: "ripgrep".to_string(),
-            name: "Ripgrep (rg)".to_string(),
-            description: "基于 Rust 实现的超高速递归文本搜索工具".to_string(),
-            category: "CLI Utility".to_string(),
-            is_installed: false,
-            installed_version: None,
-            install_command: if cfg!(target_os = "macos") { "brew install ripgrep".to_string() } else { "winget install BurntSushi.ripgrep.MSVC".to_string() },
-            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/rust/rust-original.svg".to_string(),
-            homepage: "https://github.com/BurntSushi/ripgrep".to_string(),
-        },
     ];
 
     // Check installed status and real versions
     for tool in &mut tools {
-        let binary_name = if tool.id == "neovim" { "nvim" } else if tool.id == "ripgrep" { "rg" } else { &tool.id };
-        if let Ok(out) = std::process::Command::new(binary_name).arg("--version").output() {
-            if out.status.success() {
-                tool.is_installed = true;
-                let v = String::from_utf8_lossy(&out.stdout);
-                let first_line = v.lines().next().unwrap_or("installed");
-                let clean_version = first_line.split_whitespace().last().unwrap_or(first_line).trim_start_matches('v');
-                tool.installed_version = Some(clean_version.to_string());
-            }
+        if let Some(v) = probe_tool_version(&tool.id) {
+            tool.is_installed = true;
+            tool.installed_version = Some(v);
         }
     }
 
     Ok(tools)
+}
+
+fn probe_tool_version(tool_id: &str) -> Option<String> {
+    let (cmd, args): (&str, &[&str]) = match tool_id {
+        "docker-compose" => ("docker-compose", &["--version"]),
+        "nginx" => ("nginx", &["-v"]),
+        "redis" => ("redis-server", &["--version"]),
+        "mysql" => ("mysql", &["--version"]),
+        "postgresql" => ("psql", &["--version"]),
+        "mongodb" => ("mongod", &["--version"]),
+        "neovim" => ("nvim", &["--version"]),
+        "ripgrep" => ("rg", &["--version"]),
+        "fd" => if cfg!(target_os = "linux") { ("fdfind", &["--version"]) } else { ("fd", &["--version"]) },
+        "ffmpeg" => ("ffmpeg", &["-version"]),
+        _ => (tool_id, &["--version"]),
+    };
+
+    if let Ok(out) = std::process::Command::new(cmd).args(args).output() {
+        if out.status.success() || (!out.stderr.is_empty() && tool_id == "nginx") {
+            let stdout_str = String::from_utf8_lossy(&out.stdout);
+            let stderr_str = String::from_utf8_lossy(&out.stderr);
+            let raw = if !stdout_str.trim().is_empty() { stdout_str } else { stderr_str };
+
+            for word in raw.split(|c: char| c.is_whitespace() || c == '/' || c == '(' || c == ')' || c == ',') {
+                let candidate = word.trim_start_matches(|c: char| !c.is_ascii_digit());
+                let semver: String = candidate.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                let clean = semver.trim_end_matches('.');
+                if clean.contains('.') && clean.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                    return Some(clean.to_string());
+                }
+            }
+            let first_line = raw.lines().next().unwrap_or("installed");
+            return Some(first_line.trim().to_string());
+        }
+    }
+
+    // Fallbacks
+    if tool_id == "docker-compose" {
+        if let Ok(out) = std::process::Command::new("docker").args(["compose", "version"]).output() {
+            if out.status.success() {
+                let raw = String::from_utf8_lossy(&out.stdout);
+                for word in raw.split_whitespace() {
+                    let candidate = word.trim_start_matches(|c: char| !c.is_ascii_digit());
+                    let clean: String = candidate.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                    if clean.contains('.') {
+                        return Some(clean.trim_end_matches('.').to_string());
+                    }
+                }
+            }
+        }
+    } else if tool_id == "mongodb" {
+        if let Ok(out) = std::process::Command::new("mongosh").args(["--version"]).output() {
+            if out.status.success() {
+                return Some(String::from_utf8_lossy(&out.stdout).trim().to_string());
+            }
+        }
+    } else if tool_id == "redis" {
+        if let Ok(out) = std::process::Command::new("redis-cli").args(["--version"]).output() {
+            if out.status.success() {
+                let raw = String::from_utf8_lossy(&out.stdout);
+                for word in raw.split_whitespace() {
+                    let candidate = word.trim_start_matches(|c: char| !c.is_ascii_digit());
+                    let clean: String = candidate.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                    if clean.contains('.') {
+                        return Some(clean.trim_end_matches('.').to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 #[tauri::command]

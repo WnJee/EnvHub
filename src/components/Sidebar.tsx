@@ -39,14 +39,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badgeColor: 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
     },
     {
-      id: 'projects' as TabType,
-      label: '项目环境隔离',
-      sublabel: 'Projects',
-      icon: FolderGit2,
-      badge: undefined,
-      badgeColor: 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
-    },
-    {
       id: 'system-tools' as TabType,
       label: '系统工具箱',
       sublabel: 'System CLI',
@@ -72,6 +64,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' 
         : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
     },
+    {
+      id: 'projects' as TabType,
+      label: '项目环境隔离',
+      sublabel: 'Projects',
+      icon: FolderGit2,
+      badge: undefined,
+      badgeColor: 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+    },
   ];
 
   return (
@@ -96,7 +96,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="font-bold tracking-tight text-white flex items-center gap-1.5 text-sm">
               EnvHub
               <span className="text-[9px] uppercase font-mono px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30 font-semibold">
-                v0.1
+                v0.2.0
               </span>
             </div>
             <p className="text-[10px] text-slate-400 font-medium">开发环境与版本管理</p>

@@ -137,6 +137,105 @@ const SUPPORTED_TOOLS: &[ToolMeta] = &[
         version_args: &["--version"],
         mise_aliases: &["php"],
     },
+    ToolMeta {
+        id: "zig",
+        name: "Zig",
+        category: "runtime",
+        description: "通用高性能系统编程语言与 C/C++ 极速交叉编译工具链",
+        icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/zig/zig-original.svg",
+        official_site: "https://ziglang.org",
+        exec_name: "zig",
+        version_args: &["version"],
+        mise_aliases: &["zig"],
+    },
+    ToolMeta {
+        id: "dotnet",
+        name: ".NET SDK",
+        category: "runtime",
+        description: "微软开源跨平台开发平台，支持 C#、F# 与现代 Web/云原生应用",
+        icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/dot-net/dot-net-original.svg",
+        official_site: "https://dotnet.microsoft.com",
+        exec_name: "dotnet",
+        version_args: &["--version"],
+        mise_aliases: &["dotnet", "dotnet-core"],
+    },
+    ToolMeta {
+        id: "dart",
+        name: "Dart",
+        category: "runtime",
+        description: "客户端优化的快速响应语言，Flutter 跨平台开发核心驱动",
+        icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/dart/dart-original.svg",
+        official_site: "https://dart.dev",
+        exec_name: "dart",
+        version_args: &["--version"],
+        mise_aliases: &["dart"],
+    },
+    ToolMeta {
+        id: "flutter",
+        name: "Flutter",
+        category: "runtime",
+        description: "Google 跨平台 UI 软件开发工具包，支持移动、Web 与桌面端",
+        icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/flutter/flutter-original.svg",
+        official_site: "https://flutter.dev",
+        exec_name: "flutter",
+        version_args: &["--version"],
+        mise_aliases: &["flutter"],
+    },
+    ToolMeta {
+        id: "kotlin",
+        name: "Kotlin",
+        category: "runtime",
+        description: "运行于 JVM 的现代静态类型语言，Android 官方首选开发语言",
+        icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/kotlin/kotlin-original.svg",
+        official_site: "https://kotlinlang.org",
+        exec_name: "kotlinc",
+        version_args: &["-version"],
+        mise_aliases: &["kotlin"],
+    },
+    ToolMeta {
+        id: "elixir",
+        name: "Elixir",
+        category: "runtime",
+        description: "构建于 Erlang VM 之上的高可扩展、高并发函数式编程语言",
+        icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/elixir/elixir-original.svg",
+        official_site: "https://elixir-lang.org",
+        exec_name: "elixir",
+        version_args: &["--version"],
+        mise_aliases: &["elixir"],
+    },
+    ToolMeta {
+        id: "erlang",
+        name: "Erlang / OTP",
+        category: "runtime",
+        description: "极高容错与并发分布式系统的工业级编程语言与运行时",
+        icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/erlang/erlang-original.svg",
+        official_site: "https://www.erlang.org",
+        exec_name: "erl",
+        version_args: &["-eval", "erlang:display(erlang:system_info(otp_release)), halt().", "-noshell"],
+        mise_aliases: &["erlang"],
+    },
+    ToolMeta {
+        id: "lua",
+        name: "Lua",
+        category: "runtime",
+        description: "轻量、紧凑且快速的可嵌入式脚本语言，广泛用于游戏与 Nginx 生态",
+        icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/lua/lua-original.svg",
+        official_site: "https://www.lua.org",
+        exec_name: "lua",
+        version_args: &["-v"],
+        mise_aliases: &["lua"],
+    },
+    ToolMeta {
+        id: "terraform",
+        name: "Terraform",
+        category: "runtime",
+        description: "HashiCorp 基础设施即代码 (IaC) 多云资源编排标准工具",
+        icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/terraform/terraform-original.svg",
+        official_site: "https://www.terraform.io",
+        exec_name: "terraform",
+        version_args: &["version"],
+        mise_aliases: &["terraform"],
+    },
 ];
 
 /// Robust extraction of clean semantic version number from CLI stdout
@@ -250,16 +349,23 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
             if let Ok(output) = std::process::Command::new(bin).args(["ls-remote", meta.id]).output() {
                 if output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout);
-                    let mut list: Vec<String> = stdout
+                    let raw_list: Vec<String> = stdout
                         .lines()
                         .map(|l| l.trim().to_string())
                         .filter(|l| !l.is_empty())
-                        .rev()
+                        .collect();
+                    let curated: Vec<String> = filter_latest_minor_versions(raw_list)
+                        .into_iter()
                         .take(25)
                         .collect();
-                    available_versions.append(&mut list);
+                    available_versions = curated;
                 }
             }
+        }
+
+        // Fallback default curated versions if Mise ls-remote returned empty
+        if available_versions.is_empty() {
+            available_versions = get_fallback_curated_versions(meta.id);
         }
 
         tools.push(RuntimeTool {
@@ -279,24 +385,146 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
     Ok(tools)
 }
 
+fn get_fallback_curated_versions(tool_id: &str) -> Vec<String> {
+    match tool_id {
+        "node" => vec![
+            "25.9.0".into(), "25.8.2".into(), "25.7.0".into(), "25.6.1".into(),
+            "24.1.0".into(), "24.0.2".into(), "23.9.0".into(), "22.14.0".into(),
+            "20.18.3".into(), "18.20.7".into(),
+        ],
+        "go" => vec![
+            "1.24.0".into(), "1.23.6".into(), "1.22.12".into(), "1.21.13".into(),
+            "1.20.14".into(), "1.19.13".into(),
+        ],
+        "python" => vec![
+            "3.13.2".into(), "3.12.9".into(), "3.11.11".into(), "3.10.16".into(),
+            "3.9.21".into(), "3.8.20".into(),
+        ],
+        "rust" => vec![
+            "1.85.0".into(), "1.84.1".into(), "1.83.0".into(), "1.82.0".into(),
+            "1.81.0".into(), "1.80.1".into(),
+        ],
+        "java" => vec![
+            "21.0.6".into(), "17.0.14".into(), "11.0.26".into(), "8.0.442".into(),
+        ],
+        "ruby" => vec![
+            "3.4.2".into(), "3.3.7".into(), "3.2.7".into(), "3.1.6".into(),
+        ],
+        "bun" => vec![
+            "1.2.4".into(), "1.1.43".into(), "1.0.36".into(),
+        ],
+        "deno" => vec![
+            "2.2.3".into(), "2.1.10".into(), "2.0.6".into(), "1.46.3".into(),
+        ],
+        "php" => vec![
+            "8.4.4".into(), "8.3.17".into(), "8.2.27".into(), "8.1.31".into(),
+        ],
+        "zig" => vec![
+            "0.14.0".into(), "0.13.0".into(), "0.12.1".into(), "0.11.0".into(),
+        ],
+        "dotnet" => vec![
+            "9.0.2".into(), "8.0.13".into(), "7.0.20".into(), "6.0.36".into(),
+        ],
+        "dart" => vec![
+            "3.7.0".into(), "3.6.2".into(), "3.5.4".into(), "3.4.4".into(),
+        ],
+        "flutter" => vec![
+            "3.29.0".into(), "3.27.4".into(), "3.24.5".into(), "3.22.3".into(),
+        ],
+        "kotlin" => vec![
+            "2.1.10".into(), "2.0.21".into(), "1.9.25".into(), "1.8.22".into(),
+        ],
+        "elixir" => vec![
+            "1.18.2".into(), "1.17.3".into(), "1.16.3".into(), "1.15.7".into(),
+        ],
+        "erlang" => vec![
+            "27.2.1".into(), "26.2.5".into(), "25.3.2".into(),
+        ],
+        "lua" => vec![
+            "5.4.7".into(), "5.3.6".into(), "5.2.4".into(), "5.1.5".into(),
+        ],
+        "terraform" => vec![
+            "1.10.5".into(), "1.9.8".into(), "1.8.5".into(), "1.7.5".into(),
+        ],
+        _ => vec!["latest".into()],
+    }
+}
+
+/// Filters version list to only keep the latest patch version for each major.minor series
+/// e.g. ["25.8.0", "25.8.1", "25.8.2", "25.9.0"] -> ["25.9.0", "25.8.2"]
+fn filter_latest_minor_versions(versions: Vec<String>) -> Vec<String> {
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<(u64, u64), (u64, bool, String)> = BTreeMap::new();
+    let mut non_semver: Vec<String> = Vec::new();
+
+    for v in versions {
+        let trimmed = v.trim().trim_start_matches('v');
+        let parts: Vec<&str> = trimmed.split('.').collect();
+        if parts.len() >= 2 {
+            let major = parts[0].parse::<u64>();
+            let minor = parts[1].parse::<u64>();
+            let (patch, is_prerelease) = if parts.len() >= 3 {
+                let p_raw = parts[2];
+                let is_pre = p_raw.contains('-') || p_raw.contains("rc") || p_raw.contains("beta") || p_raw.contains("alpha");
+                let patch_num: u64 = p_raw.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
+                (patch_num, is_pre)
+            } else {
+                (0, false)
+            };
+
+            if let (Ok(maj), Ok(min)) = (major, minor) {
+                if let Some((existing_patch, existing_pre, _)) = groups.get(&(maj, min)) {
+                    if *existing_pre && !is_prerelease {
+                        groups.insert((maj, min), (patch, is_prerelease, v.clone()));
+                    } else if !is_prerelease && !existing_pre {
+                        if patch >= *existing_patch {
+                            groups.insert((maj, min), (patch, is_prerelease, v.clone()));
+                        }
+                    } else if is_prerelease && *existing_pre {
+                        if patch >= *existing_patch {
+                            groups.insert((maj, min), (patch, is_prerelease, v.clone()));
+                        }
+                    }
+                } else {
+                    groups.insert((maj, min), (patch, is_prerelease, v.clone()));
+                }
+                continue;
+            }
+        }
+        if !non_semver.contains(&v) {
+            non_semver.push(v);
+        }
+    }
+
+    let mut result: Vec<String> = groups.into_iter().rev().map(|(_, (_, _, ver))| ver).collect();
+    for item in non_semver {
+        if !result.contains(&item) {
+            result.push(item);
+        }
+    }
+    result
+}
+
 #[tauri::command]
 pub async fn get_remote_versions(tool_id: String) -> Result<Vec<String>, String> {
     if let Some(bin) = env_helper::find_mise_binary() {
         if let Ok(output) = std::process::Command::new(&bin).args(["ls-remote", &tool_id]).output() {
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                let list: Vec<String> = stdout
+                let raw_list: Vec<String> = stdout
                     .lines()
                     .map(|l| l.trim().to_string())
                     .filter(|l| !l.is_empty())
-                    .rev()
+                    .collect();
+                let curated: Vec<String> = filter_latest_minor_versions(raw_list)
+                    .into_iter()
                     .take(40)
                     .collect();
-                return Ok(list);
+                return Ok(curated);
             }
         }
     }
-    Ok(vec![])
+    Ok(get_fallback_curated_versions(&tool_id))
 }
 
 #[tauri::command]
