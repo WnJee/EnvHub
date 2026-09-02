@@ -12,6 +12,10 @@ pub fn fix_system_path() {
             home.join(".local/share/mise/bin"),
             home.join(".cargo/bin"),
             home.join(".local/bin"),
+            home.join("go/bin"),
+            home.join(".go/bin"),
+            home.join(".bun/bin"),
+            home.join(".deno/bin"),
             home.join(".nvm/current/bin"),
             home.join(".proto/shims"),
             home.join(".proto/bin"),
@@ -24,11 +28,15 @@ pub fn fix_system_path() {
         }
     }
 
-    // 2. Standard UNIX / Homebrew paths
+    // 2. Standard UNIX / Homebrew / Language standard paths
     let candidate_paths = [
         "/opt/homebrew/bin",
         "/opt/homebrew/sbin",
         "/usr/local/bin",
+        "/usr/local/go/bin",
+        "/opt/homebrew/opt/go/libexec/bin",
+        "/opt/homebrew/opt/openjdk/bin",
+        "/usr/local/opt/openjdk/bin",
         "/usr/bin",
         "/bin",
         "/usr/sbin",

@@ -1,6 +1,6 @@
 [package]
 name = "envhub"
-version = "0.2.0"
+version = "0.2.1"
 description = "EnvHub - Cross-platform Development Environment and Runtime Manager"
 authors = ["EnvHub Team"]
 edition = "2021"

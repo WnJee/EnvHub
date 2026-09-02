@@ -9,7 +9,8 @@ import {
   Check, 
   Terminal, 
   Clock,
-  ShieldAlert
+  ShieldAlert,
+  Trash2
 } from 'lucide-react';
 import { api } from '../services/tauri';
 import { useToast } from './Toast';
@@ -18,6 +19,7 @@ interface ProjectManagerProps {
   projects: ProjectEnv[];
   runtimes: RuntimeTool[];
   onAddProject: (path: string) => void;
+  onRemoveProject?: (path: string) => void;
   onSetProjectToolVersion: (projectId: string, toolId: string, version: string) => void;
 }
 
@@ -25,6 +27,7 @@ export const ProjectManager: React.FC<ProjectManagerProps> = ({
   projects,
   runtimes,
   onAddProject,
+  onRemoveProject,
   onSetProjectToolVersion,
 }) => {
   const [newProjectPath, setNewProjectPath] = useState<string>('');
@@ -145,11 +148,20 @@ export const ProjectManager: React.FC<ProjectManagerProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     <span className="text-[10px] text-slate-400 flex items-center gap-1 font-mono">
                       <Clock className="w-3 h-3" />
                       {project.lastModified || '已同步'}
                     </span>
+                    {onRemoveProject && (
+                      <button
+                        onClick={() => onRemoveProject(project.path)}
+                        title="移除此工程绑定"
+                        className="p-1 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
 

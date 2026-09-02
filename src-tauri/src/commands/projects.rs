@@ -21,6 +21,34 @@ pub struct ProjectEnv {
     pub last_modified: Option<String>,
 }
 
+fn get_projects_config_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".config/envhub/projects.json"))
+}
+
+fn load_saved_project_paths() -> Vec<String> {
+    if let Some(p) = get_projects_config_path() {
+        if p.exists() {
+            if let Ok(content) = fs::read_to_string(p) {
+                if let Ok(paths) = serde_json::from_str::<Vec<String>>(&content) {
+                    return paths;
+                }
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn save_project_paths(paths: &[String]) {
+    if let Some(p) = get_projects_config_path() {
+        if let Some(parent) = p.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Ok(content) = serde_json::to_string_pretty(paths) {
+            let _ = fs::write(p, content);
+        }
+    }
+}
+
 /// Helper to extract real tools from a directory
 fn inspect_directory_tools(dir: &Path) -> (Option<String>, Vec<ProjectTool>) {
     let mut config_file = None;
@@ -116,22 +144,23 @@ fn inspect_directory_tools(dir: &Path) -> (Option<String>, Vec<ProjectTool>) {
 
 #[tauri::command]
 pub async fn get_projects() -> Result<Vec<ProjectEnv>, String> {
-    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let saved_paths = load_saved_project_paths();
     let mut projects = Vec::new();
 
-    // 1. Add current workspace
-    if current_dir.exists() {
-        let (config_file, tools) = inspect_directory_tools(&current_dir);
-        let name = current_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "sharp-turing".to_string());
-        
-        projects.push(ProjectEnv {
-            id: "current_workspace".to_string(),
-            name,
-            path: current_dir.to_string_lossy().to_string(),
-            config_file,
-            tools,
-            last_modified: Some("当前工作空间".to_string()),
-        });
+    for path_str in saved_paths {
+        let p = Path::new(&path_str);
+        if p.exists() {
+            let (config_file, tools) = inspect_directory_tools(p);
+            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "project".to_string());
+            projects.push(ProjectEnv {
+                id: format!("p_{}", path_str.replace('/', "_").replace('\\', "_")),
+                name,
+                path: path_str,
+                config_file,
+                tools,
+                last_modified: Some("已绑定".to_string()),
+            });
+        }
     }
 
     Ok(projects)
@@ -154,8 +183,14 @@ pub async fn scan_and_add_project(path: String) -> Result<ProjectEnv, String> {
         });
     }
 
+    let mut saved = load_saved_project_paths();
+    if !saved.contains(&path) {
+        saved.push(path.clone());
+        save_project_paths(&saved);
+    }
+
     Ok(ProjectEnv {
-        id: format!("p_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()),
+        id: format!("p_{}", path.replace('/', "_").replace('\\', "_")),
         name,
         path,
         config_file,
@@ -165,10 +200,17 @@ pub async fn scan_and_add_project(path: String) -> Result<ProjectEnv, String> {
 }
 
 #[tauri::command]
-pub async fn set_project_tool_version(_project_id: String, tool_id: String, version: String) -> Result<bool, String> {
-    // If project_id is current workspace or path is valid, update .mise.toml
-    let current_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mise_toml_path = current_dir.join(".mise.toml");
+pub async fn remove_project(path: String) -> Result<bool, String> {
+    let mut saved = load_saved_project_paths();
+    saved.retain(|p| p != &path);
+    save_project_paths(&saved);
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn set_project_tool_version(project_path: String, tool_id: String, version: String) -> Result<bool, String> {
+    let target_dir = PathBuf::from(&project_path);
+    let mise_toml_path = target_dir.join(".mise.toml");
 
     let mut lines = Vec::new();
     let mut found_tool = false;

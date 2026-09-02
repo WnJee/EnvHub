@@ -15,6 +15,8 @@ import {
   Plus,
   AlertCircle
 } from 'lucide-react';
+import { api } from '../services/tauri';
+import { useToast } from './Toast';
 
 interface RuntimeManagerProps {
   runtimes: RuntimeTool[];
@@ -97,6 +99,20 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
   const [versionFilter, setVersionFilter] = useState<'all' | 'installed' | 'lts'>('all');
   const [remoteSearch, setRemoteSearch] = useState<string>('');
   const [customVersionInput, setCustomVersionInput] = useState<string>('');
+  const [testingVersion, setTestingVersion] = useState<string | null>(null);
+  const toast = useToast();
+
+  const handleQuickTerminalCheck = async (toolId: string, version: string) => {
+    setTestingVersion(version);
+    try {
+      const output = await api.openTerminalForRuntime(toolId, version);
+      toast.success(output, `已唤起终端验证 ${toolId}`);
+    } catch (err) {
+      toast.error(`打开终端失败: ${err}`);
+    } finally {
+      setTestingVersion(null);
+    }
+  };
 
   const filteredRuntimes = runtimes.filter(
     (t) =>
@@ -368,6 +384,16 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                           <Check className="w-3 h-3" /> 命令行终端默认调用
                         </div>
                       )}
+
+                      <button
+                        onClick={() => handleQuickTerminalCheck(currentTool.id, ver)}
+                        disabled={testingVersion === ver}
+                        title="在系统终端中快捷打开并验证此版本"
+                        className="px-2.5 py-1 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-medium border border-slate-700/60 transition-all flex items-center gap-1 shrink-0"
+                      >
+                        <Terminal className="w-3 h-3 text-emerald-400" />
+                        <span>终端查看</span>
+                      </button>
                     </div>
                   </div>
                 );

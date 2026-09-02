@@ -285,42 +285,83 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
         let mut global_version: Option<String> = None;
         let mut available_versions: Vec<String> = Vec::new();
 
-        // 1. Probe host system executable
-        let system_probe = std::process::Command::new(meta.exec_name)
-            .args(meta.version_args)
-            .output();
+        // 1. Probe host system executable with fallback binary paths
+        let mut probe_execs = vec![meta.exec_name.to_string()];
+        if let Some(home) = dirs::home_dir() {
+            match meta.id {
+                "go" => {
+                    probe_execs.push("/usr/local/go/bin/go".into());
+                    probe_execs.push("/opt/homebrew/bin/go".into());
+                    probe_execs.push(home.join("go/bin/go").to_string_lossy().to_string());
+                    probe_execs.push(home.join(".local/share/mise/shims/go").to_string_lossy().to_string());
+                }
+                "python" => {
+                    probe_execs.push("python".into());
+                    probe_execs.push("/opt/homebrew/bin/python3".into());
+                    probe_execs.push("/usr/local/bin/python3".into());
+                }
+                "rust" => {
+                    probe_execs.push(home.join(".cargo/bin/rustc").to_string_lossy().to_string());
+                    probe_execs.push("/opt/homebrew/bin/rustc".into());
+                }
+                "node" => {
+                    probe_execs.push("/opt/homebrew/bin/node".into());
+                    probe_execs.push("/usr/local/bin/node".into());
+                    probe_execs.push(home.join(".local/share/mise/shims/node").to_string_lossy().to_string());
+                }
+                "bun" => {
+                    probe_execs.push(home.join(".bun/bin/bun").to_string_lossy().to_string());
+                }
+                "deno" => {
+                    probe_execs.push(home.join(".deno/bin/deno").to_string_lossy().to_string());
+                }
+                _ => {}
+            }
+        }
 
-        if let Ok(out) = system_probe {
-            if out.status.success() {
-                let stdout_str = String::from_utf8_lossy(&out.stdout);
-                let stderr_str = String::from_utf8_lossy(&out.stderr);
-                let raw_ver = if !stdout_str.trim().is_empty() { stdout_str } else { stderr_str };
+        for exec_path in probe_execs {
+            if let Ok(out) = std::process::Command::new(&exec_path).args(meta.version_args).output() {
+                if out.status.success() || (meta.id == "java" && !out.stderr.is_empty()) {
+                    let stdout_str = String::from_utf8_lossy(&out.stdout);
+                    let stderr_str = String::from_utf8_lossy(&out.stderr);
+                    let raw_ver = if !stdout_str.trim().is_empty() { stdout_str } else { stderr_str };
 
-                if let Some(ver) = parse_version_output(meta.id, &raw_ver) {
-                    if !installed_versions.contains(&ver) {
-                        installed_versions.push(ver.clone());
+                    if let Some(ver) = parse_version_output(meta.id, &raw_ver) {
+                        if !installed_versions.contains(&ver) {
+                            installed_versions.push(ver.clone());
+                        }
+                        if active_version.is_none() {
+                            active_version = Some(ver.clone());
+                            global_version = Some(ver);
+                        }
+                        break;
                     }
-                    active_version = Some(ver.clone());
-                    global_version = Some(ver);
                 }
             }
         }
 
-        // Fallback for python: probe "python" if "python3" was not found
-        if meta.id == "python" && installed_versions.is_empty() {
-            if let Ok(out) = std::process::Command::new("python").arg("--version").output() {
-                if out.status.success() {
-                    let raw = String::from_utf8_lossy(&out.stdout);
-                    if let Some(ver) = parse_version_output("python", &raw) {
-                        installed_versions.push(ver.clone());
-                        active_version = Some(ver.clone());
-                        global_version = Some(ver);
+        // 2. Scan Mise installs directory directly: ~/.local/share/mise/installs/<tool>/*
+        if let Some(home) = dirs::home_dir() {
+            for alias in meta.mise_aliases {
+                let install_dir = home.join(".local/share/mise/installs").join(alias);
+                if install_dir.is_dir() {
+                    if let Ok(entries) = std::fs::read_dir(install_dir) {
+                        for entry in entries.flatten() {
+                            if entry.path().is_dir() {
+                                if let Some(folder_name) = entry.file_name().to_str() {
+                                    let clean_v = parse_version_output(meta.id, folder_name).unwrap_or_else(|| folder_name.to_string());
+                                    if !clean_v.is_empty() && !installed_versions.contains(&clean_v) {
+                                        installed_versions.push(clean_v);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // 2. Query Mise CLI if available
+        // 3. Query Mise CLI if available
         if let Some(ref bin) = mise_bin {
             for alias in meta.mise_aliases {
                 if let Ok(output) = std::process::Command::new(bin).args(["ls", "--json", alias]).output() {
@@ -345,6 +386,24 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
                 }
             }
 
+            // Query Mise current active version
+            if active_version.is_none() {
+                if let Ok(cur_out) = std::process::Command::new(bin).args(["current", meta.id]).output() {
+                    if cur_out.status.success() {
+                        let cur_str = String::from_utf8_lossy(&cur_out.stdout).trim().to_string();
+                        if !cur_str.is_empty() && !cur_str.starts_with("No version") {
+                            if let Some(clean_v) = parse_version_output(meta.id, &cur_str) {
+                                if !installed_versions.contains(&clean_v) {
+                                    installed_versions.push(clean_v.clone());
+                                }
+                                active_version = Some(clean_v.clone());
+                                global_version = Some(clean_v);
+                            }
+                        }
+                    }
+                }
+            }
+
             // Remote versions from mise ls-remote
             if let Ok(output) = std::process::Command::new(bin).args(["ls-remote", meta.id]).output() {
                 if output.status.success() {
@@ -360,6 +419,51 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
                         .collect();
                     available_versions = curated;
                 }
+            }
+        }
+
+        // 4. Read global Mise configuration file ~/.config/mise/config.toml or ~/.tool-versions
+        if let Some(home) = dirs::home_dir() {
+            let config_paths = [
+                home.join(".config/mise/config.toml"),
+                home.join(".mise.toml"),
+                home.join(".tool-versions"),
+            ];
+            for cp in config_paths {
+                if cp.exists() {
+                    if let Ok(content) = std::fs::read_to_string(cp) {
+                        for line in content.lines() {
+                            let trim = line.trim();
+                            for alias in meta.mise_aliases {
+                                if trim.starts_with(alias) && (trim.contains('=') || trim.contains(' ')) {
+                                    let val = trim.split(|c: char| c == '=' || c.is_whitespace()).last().unwrap_or("").trim().trim_matches('"').trim_matches('\'');
+                                    if let Some(clean_v) = parse_version_output(meta.id, val) {
+                                        if !installed_versions.contains(&clean_v) {
+                                            installed_versions.push(clean_v.clone());
+                                        }
+                                        if global_version.is_none() {
+                                            global_version = Some(clean_v.clone());
+                                        }
+                                        if active_version.is_none() {
+                                            active_version = Some(clean_v);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 5. Final fallback: If versions are installed, ensure active_version and global_version are not None
+        if active_version.is_none() && !installed_versions.is_empty() {
+            if let Some(ref g) = global_version {
+                active_version = Some(g.clone());
+            } else {
+                let first = installed_versions[0].clone();
+                active_version = Some(first.clone());
+                global_version = Some(first);
             }
         }
 
@@ -667,4 +771,62 @@ pub async fn bootstrap_mise_cli() -> Result<bool, String> {
     } else {
         Err(format!("自举脚本返回错误退出码: {:?}", status.code()))
     }
+}
+
+#[tauri::command]
+pub async fn open_terminal_for_runtime(tool_id: String, version: String) -> Result<String, String> {
+    env_helper::fix_system_path();
+
+    let (exec, args): (&str, &[&str]) = match tool_id.as_str() {
+        "node" => ("node", &["--version"]),
+        "python" => ("python3", &["--version"]),
+        "go" => ("go", &["version"]),
+        "rust" => ("rustc", &["--version"]),
+        "java" => ("java", &["-version"]),
+        "ruby" => ("ruby", &["-v"]),
+        "bun" => ("bun", &["--version"]),
+        "deno" => ("deno", &["--version"]),
+        "php" => ("php", &["--version"]),
+        "zig" => ("zig", &["version"]),
+        "dotnet" => ("dotnet", &["--version"]),
+        "dart" => ("dart", &["--version"]),
+        "flutter" => ("flutter", &["--version"]),
+        "kotlin" => ("kotlinc", &["-version"]),
+        "elixir" => ("elixir", &["--version"]),
+        "erlang" => ("erl", &["-eval", "erlang:display(erlang:system_info(otp_release)), halt().", "-noshell"]),
+        "lua" => ("lua", &["-v"]),
+        "terraform" => ("terraform", &["version"]),
+        _ => (&tool_id, &["--version"]),
+    };
+
+    let probe_out = std::process::Command::new(exec).args(args).output();
+    let version_output = if let Ok(out) = probe_out {
+        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        if !stdout.is_empty() { stdout } else { stderr }
+    } else {
+        format!("{} v{}", tool_id, version)
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!("echo '=== EnvHub 环境检测: {} ==='; {} {}; echo ''; exec $SHELL", tool_id, exec, args.join(" "));
+        let _ = std::process::Command::new("osascript")
+            .args(["-e", &format!("tell application \"Terminal\" to do script \"{}\"", script)])
+            .status();
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "start", "powershell", "-NoExit", "-Command", &format!("Write-Host '=== EnvHub 环境检测: {} ===' -ForegroundColor Cyan; {} {}; Write-Host ''", tool_id, exec, args.join(" "))])
+            .status();
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("x-terminal-emulator").status();
+    }
+
+    Ok(version_output)
 }

@@ -24,6 +24,7 @@ pub fn run() {
             uninstall_runtime_version,
             install_runtime_version,
             bootstrap_mise_cli,
+            open_terminal_for_runtime,
 
             // System commands
             get_system_status,
@@ -41,6 +42,7 @@ pub fn run() {
             // Project commands
             get_projects,
             scan_and_add_project,
+            remove_project,
             set_project_tool_version,
             open_in_editor,
             open_in_terminal,

@@ -239,6 +239,18 @@ const MainDashboard: React.FC = () => {
     }
   };
 
+  const handleRemoveProject = async (path: string) => {
+    try {
+      if (isTauri()) {
+        await api.removeProject(path);
+      }
+      setProjects((prev) => prev.filter((p) => p.path !== path));
+      toast.success('已移除工程绑定');
+    } catch (err) {
+      toast.error(`移除工程失败: ${err}`);
+    }
+  };
+
   const handleSetProjectToolVersion = async (projectId: string, toolId: string, version: string) => {
     try {
       if (!isTauri()) {
@@ -440,6 +452,7 @@ const MainDashboard: React.FC = () => {
               projects={projects}
               runtimes={runtimes}
               onAddProject={handleAddProject}
+              onRemoveProject={handleRemoveProject}
               onSetProjectToolVersion={handleSetProjectToolVersion}
             />
           )}

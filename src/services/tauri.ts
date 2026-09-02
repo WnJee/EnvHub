@@ -131,6 +131,22 @@ export const api = {
     throw new Error('未运行在 Tauri 桌面环境中');
   },
 
+  async removeProject(path: string): Promise<boolean> {
+    if (isTauri()) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke<boolean>('remove_project', { path });
+    }
+    return true;
+  },
+
+  async openTerminalForRuntime(toolId: string, version: string): Promise<string> {
+    if (isTauri()) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke<string>('open_terminal_for_runtime', { toolId, version });
+    }
+    return `模拟终端检测: ${toolId} v${version}`;
+  },
+
   async openInEditor(path: string): Promise<boolean> {
     if (isTauri()) {
       const { invoke } = await import('@tauri-apps/api/core');
