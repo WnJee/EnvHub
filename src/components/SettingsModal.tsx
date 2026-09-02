@@ -5,25 +5,36 @@ import {
   Cpu, 
   Download, 
   CheckCircle2, 
-  ShieldCheck,
-  AlertTriangle,
-  Loader2
+  ShieldCheck, 
+  AlertTriangle, 
+  Loader2,
+  RefreshCw,
+  Sparkles,
+  ExternalLink
 } from 'lucide-react';
 import { useToast } from './Toast';
+import { CURRENT_APP_VERSION } from '../services/updater';
 
 interface SettingsModalProps {
   systemStatus: SystemStatus;
   onBootstrapMise: () => Promise<void>;
   isBootstrapping: boolean;
+  onCheckUpdate: (manual: boolean) => Promise<void>;
+  isCheckingUpdate: boolean;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   systemStatus,
   onBootstrapMise,
   isBootstrapping,
+  onCheckUpdate,
+  isCheckingUpdate,
 }) => {
   const [customPath, setCustomPath] = useState(systemStatus.misePath || '');
-  const [autoUpdate, setAutoUpdate] = useState(true);
+  const [autoSyncEnv, setAutoSyncEnv] = useState(true);
+  const [autoCheckUpdate, setAutoCheckUpdate] = useState(() => {
+    return localStorage.getItem('auto_check_update') !== 'false';
+  });
   const toast = useToast();
 
   const handleSavePath = () => {
@@ -32,6 +43,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       return;
     }
     toast.success(`已保存 Mise 路径配置: ${customPath}`);
+  };
+
+  const handleToggleAutoCheckUpdate = (checked: boolean) => {
+    setAutoCheckUpdate(checked);
+    localStorage.setItem('auto_check_update', checked ? 'true' : 'false');
+    toast.info(checked ? '已开启启动时自动检查更新' : '已关闭自动检查更新');
   };
 
   return (
@@ -45,9 +62,70 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
           <h2 className="text-lg sm:text-xl font-bold text-white mt-1">客户端与引擎设置</h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            管理 Mise CLI 引擎路径、自举策略以及跨平台系统环境激活行为。
+            管理 Mise CLI 引擎路径、自举策略以及应用版本更新。
           </p>
         </div>
+      </div>
+
+      {/* App Version & Updater Card */}
+      <div className="p-4 sm:p-5 rounded-2xl bg-slate-900/70 border border-slate-800 space-y-3.5">
+        <h3 className="text-xs sm:text-sm font-bold text-white flex items-center gap-2">
+          <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+          软件版本与更新检测
+        </h3>
+
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl bg-slate-950 border border-slate-800">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-white">EnvHub 当前版本</span>
+              <span className="text-xs font-mono font-semibold px-2 py-0.2 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                v{CURRENT_APP_VERSION}
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400 mt-0.5">
+              已接入 GitHub Releases 官方通道，支持一键热检查与下载
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => onCheckUpdate(true)}
+              disabled={isCheckingUpdate}
+              className="px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold shadow-md shadow-blue-500/20 flex items-center gap-1.5 transition-all"
+            >
+              {isCheckingUpdate ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5" />
+              )}
+              <span>{isCheckingUpdate ? '正在检查...' : '主动检查更新'}</span>
+            </button>
+            <a
+              href="https://github.com/WnJee/EnvHub/releases"
+              target="_blank"
+              rel="noreferrer"
+              className="p-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white transition-colors"
+              title="前往 GitHub Releases"
+            >
+              <ExternalLink className="w-4 h-4" />
+            </a>
+          </div>
+        </div>
+
+        <label className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+          <div>
+            <div className="text-xs font-semibold text-slate-200">启动后自动检查新版本</div>
+            <div className="text-[10px] text-slate-400">
+              应用开启时在后台静默检测 GitHub 仓库最新发行版，发现新版本时弹窗提示
+            </div>
+          </div>
+          <input
+            type="checkbox"
+            checked={autoCheckUpdate}
+            onChange={(e) => handleToggleAutoCheckUpdate(e.target.checked)}
+            className="w-4 h-4 rounded text-blue-600 bg-slate-900 border-slate-700"
+          />
+        </label>
       </div>
 
       {/* Engine Status Card */}
@@ -150,8 +228,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
             <input
               type="checkbox"
-              checked={autoUpdate}
-              onChange={(e) => setAutoUpdate(e.target.checked)}
+              checked={autoSyncEnv}
+              onChange={(e) => setAutoSyncEnv(e.target.checked)}
               className="w-4 h-4 rounded text-blue-600 bg-slate-900 border-slate-700"
             />
           </label>
@@ -183,7 +261,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           基于 Tauri v2 (Rust) + React 18 + Tailwind CSS + Mise CLI 驱动的现代化环境管理套件
         </p>
         <div className="text-[10px] font-mono text-slate-400">
-          Version 0.1.0 • 极速原生体验
+          Version {CURRENT_APP_VERSION} • 极速原生体验
         </div>
       </div>
     </div>

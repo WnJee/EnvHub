@@ -8,8 +8,10 @@ import { MirrorManager } from './components/MirrorManager';
 import { EnvHealth } from './components/EnvHealth';
 import { SettingsModal } from './components/SettingsModal';
 import { InstallModal } from './components/InstallModal';
+import { UpdateModal } from './components/UpdateModal';
 import { ToastProvider, useToast } from './components/Toast';
-import { api } from './services/tauri';
+import { api, isTauri } from './services/tauri';
+import { checkForUpdates, UpdateInfo, CURRENT_APP_VERSION } from './services/updater';
 import { 
   RuntimeTool, 
   ProjectEnv, 
@@ -25,6 +27,7 @@ const MainDashboard: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [isPingingMirrors, setIsPingingMirrors] = useState<boolean>(false);
   const [isBootstrappingMise, setIsBootstrappingMise] = useState<boolean>(false);
+  const [isCheckingUpdate, setIsCheckingUpdate] = useState<boolean>(false);
   const toast = useToast();
 
   // Core state from real host environment
@@ -60,6 +63,15 @@ const MainDashboard: React.FC = () => {
     status: 'idle'
   });
 
+  // Update Modal State
+  const [updateState, setUpdateState] = useState<{
+    isOpen: boolean;
+    updateInfo: UpdateInfo | null;
+  }>({
+    isOpen: false,
+    updateInfo: null,
+  });
+
   // Load real data from host
   const loadAllData = async (isManual = false) => {
     setIsRefreshing(true);
@@ -81,7 +93,7 @@ const MainDashboard: React.FC = () => {
       setHealthChecks(hList);
 
       if (isManual) {
-        toast.success('已刷新并同步本机最新环境状态');
+        toast.success('已同步最新环境状态');
       }
     } catch (err) {
       console.error('Failed to load real environment data:', err);
@@ -91,16 +103,51 @@ const MainDashboard: React.FC = () => {
     }
   };
 
+  // Check for updates handler
+  const handleCheckUpdate = async (manual: boolean) => {
+    setIsCheckingUpdate(true);
+    try {
+      const info = await checkForUpdates(CURRENT_APP_VERSION);
+      if (info.hasUpdate) {
+        setUpdateState({
+          isOpen: true,
+          updateInfo: info,
+        });
+        toast.info(`发现新版本 EnvHub v${info.latestVersion}！`, '软件更新');
+      } else if (manual) {
+        toast.success(`当前已是最新版本 (v${CURRENT_APP_VERSION})`, '版本检查');
+      }
+    } catch (err) {
+      if (manual) {
+        toast.error('检查更新失败，请检查网络连接');
+      }
+    } finally {
+      setIsCheckingUpdate(false);
+    }
+  };
+
   useEffect(() => {
     loadAllData();
+
+    // Auto check for updates on startup if enabled
+    const shouldAutoCheck = localStorage.getItem('auto_check_update') !== 'false';
+    if (shouldAutoCheck) {
+      setTimeout(() => {
+        handleCheckUpdate(false);
+      }, 1500);
+    }
   }, []);
 
   // Handlers for Runtimes
   const handleSetGlobalVersion = async (toolId: string, version: string) => {
     try {
+      if (!isTauri()) {
+        toast.info('当前为浏览器预览模式，请在桌面端运行以切换系统版本');
+        return;
+      }
       const ok = await api.setGlobalVersion(toolId, version);
       if (ok) {
-        toast.success(`已将 ${toolId} 系统全局主用版本切换为 v${version}`);
+        toast.success(`已将 ${toolId} 全局版本切换为 v${version}`);
         setRuntimes((prev) =>
           prev.map((t) =>
             t.id === toolId
@@ -115,8 +162,12 @@ const MainDashboard: React.FC = () => {
   };
 
   const handleUninstallVersion = async (toolId: string, version: string) => {
-    if (!confirm(`确定要在本机真实卸载 ${toolId} v${version} 吗？`)) return;
+    if (!confirm(`确定要卸载 ${toolId} v${version} 吗？`)) return;
     try {
+      if (!isTauri()) {
+        toast.info('当前为浏览器预览模式，请在桌面端运行以执行卸载');
+        return;
+      }
       const ok = await api.uninstallVersion(toolId, version);
       if (ok) {
         toast.success(`已卸载 ${toolId} v${version}`);
@@ -129,12 +180,17 @@ const MainDashboard: React.FC = () => {
 
   // Start Real Install Handler
   const handleOpenInstallModal = (toolId: string, version: string) => {
+    if (!isTauri()) {
+      toast.info('当前为浏览器预览模式，请在桌面端运行以执行下载安装');
+      return;
+    }
+
     setInstallModalState({
       isOpen: true,
       toolId,
       version,
-      logs: [`[init] 正在连接底层 Mise CLI 管道，准备下载编译 ${toolId}@${version}...`],
-      progress: 5,
+      logs: [`[init] 正在连接 Mise 引擎，准备下载部署 ${toolId}@${version}...`],
+      progress: 10,
       status: 'running'
     });
 
@@ -171,9 +227,13 @@ const MainDashboard: React.FC = () => {
   // Handlers for Projects
   const handleAddProject = async (path: string) => {
     try {
+      if (!isTauri()) {
+        toast.info('当前为浏览器预览模式，请在桌面端运行以绑定工程');
+        return;
+      }
       const newProj = await api.addProject(path);
       setProjects((prev) => [newProj, ...prev.filter((p) => p.path !== path)]);
-      toast.success(`成功扫描并添加项目: ${newProj.name}`);
+      toast.success(`成功绑定项目: ${newProj.name}`);
     } catch (err) {
       toast.error(`添加项目失败: ${err}`);
     }
@@ -181,9 +241,13 @@ const MainDashboard: React.FC = () => {
 
   const handleSetProjectToolVersion = async (projectId: string, toolId: string, version: string) => {
     try {
+      if (!isTauri()) {
+        toast.info('当前为浏览器预览模式');
+        return;
+      }
       const ok = await api.setProjectToolVersion(projectId, toolId, version);
       if (ok) {
-        toast.success(`已将项目中的 ${toolId} 版本配置更新为 v${version}`);
+        toast.success(`已将项目中的 ${toolId} 版本更新为 v${version}`);
         setProjects((prev) =>
           prev.map((p) => {
             if (p.id === projectId) {
@@ -204,6 +268,10 @@ const MainDashboard: React.FC = () => {
   // Handlers for System Tools
   const handleInstallSystemTool = async (toolId: string) => {
     try {
+      if (!isTauri()) {
+        toast.info('请在桌面端运行以调用系统包管理器');
+        return;
+      }
       toast.info(`正在调用包管理器安装 ${toolId}...`);
       const ok = await api.installSystemTool(toolId);
       if (ok) {
@@ -218,6 +286,10 @@ const MainDashboard: React.FC = () => {
   // Handlers for Mirrors
   const handleSetMirror = async (tool: string, mirrorUrl: string) => {
     try {
+      if (!isTauri()) {
+        toast.info('请在桌面端运行以写入系统配置');
+        return;
+      }
       await api.setMirror(tool, mirrorUrl);
       setMirrors((prev) =>
         prev.map((m) => (m.tool === tool ? { ...m, currentMirror: mirrorUrl } : m))
@@ -230,6 +302,10 @@ const MainDashboard: React.FC = () => {
   const handlePingMirrors = async () => {
     setIsPingingMirrors(true);
     try {
+      if (!isTauri()) {
+        toast.info('请在桌面端运行以进行 TCP 延迟测速');
+        return;
+      }
       const pings = await api.pingMirrors();
       setMirrors((prev) =>
         prev.map((m) => ({
@@ -240,7 +316,7 @@ const MainDashboard: React.FC = () => {
           }))
         }))
       );
-      toast.success('已完成全部国内镜像源的真实延迟测速');
+      toast.success('已完成镜像源测速');
     } catch (err) {
       toast.error(`测速失败: ${err}`);
     } finally {
@@ -251,11 +327,15 @@ const MainDashboard: React.FC = () => {
   // Handlers for Health
   const handleAutoFixHealth = async (checkId: string) => {
     try {
+      if (!isTauri()) {
+        toast.info('请在桌面端运行以自动写入终端配置');
+        return;
+      }
       const ok = await api.autoFixHealthCheck(checkId);
       if (ok) {
         setHealthChecks((prev) =>
           prev.map((c) =>
-            c.id === checkId ? { ...c, status: 'ok', message: '已自动写入 Shell RC 并生效' } : c
+            c.id === checkId ? { ...c, status: 'ok', message: '已自动配置并生效' } : c
           )
         );
       }
@@ -268,12 +348,16 @@ const MainDashboard: React.FC = () => {
   const handleBootstrapMise = async () => {
     setIsBootstrappingMise(true);
     try {
-      toast.info('正在拉取并自举安装 Mise CLI 引擎...');
+      if (!isTauri()) {
+        toast.info('当前处于浏览器预览模式，请在终端执行 `curl https://mise.run | sh` 或在桌面端运行。');
+        return;
+      }
+      toast.info('正在拉取并安装 Mise CLI 引擎...');
       await api.installMiseCli();
       toast.success('Mise CLI 引擎已安装就绪！');
       loadAllData();
     } catch (err) {
-      toast.error(`自举安装失败: ${err}`);
+      toast.error(`安装失败: ${err}`);
     } finally {
       setIsBootstrappingMise(false);
     }
@@ -289,27 +373,27 @@ const MainDashboard: React.FC = () => {
   const tabTitles: Record<TabType, { title: string; subtitle: string }> = {
     runtimes: {
       title: '多语言运行时版本管理',
-      subtitle: '真实检测 Node.js / Python / Go / Rust / Java / Bun 等多版本'
+      subtitle: '支持 Node.js / Python / Go / Rust / Java / Bun 等多版本'
     },
     projects: {
       title: '项目工程环境隔离',
-      subtitle: '针对不同工程目录绑定独立开发语言版本，CD 进入目录自动生效'
+      subtitle: '针对不同工程目录绑定独立开发语言版本，进入目录自动生效'
     },
     'system-tools': {
       title: '系统级开发工具箱',
-      subtitle: '通过系统包管理器 (Homebrew / Winget / Apt) 真实管理 Git, Docker 等'
+      subtitle: '通过系统包管理器 (Homebrew / Winget / Apt) 管理 Git, Docker 等'
     },
     mirrors: {
-      title: '国内源加速与真实测速',
-      subtitle: '真实测试并写入 NPM / Pip / GoProxy / Cargo / Homebrew 国内高速镜像'
+      title: '国内源加速与测速',
+      subtitle: '测试并配置 NPM / Pip / GoProxy / Cargo 国内高速镜像'
     },
     'env-health': {
       title: '环境健康自检与 Shell 修复',
-      subtitle: '排查 ~/.zshrc、~/.bashrc 及 PATH 优先级，保障终端与 GUI 环境一致'
+      subtitle: '排查 ~/.zshrc、~/.bashrc 及 PATH 优先级，保障终端环境一致'
     },
     settings: {
       title: '客户端设置与引擎配置',
-      subtitle: '配置 Mise CLI 路径、自举策略与偏好设置'
+      subtitle: '配置 Mise CLI 路径、自举策略与软件更新'
     }
   };
 
@@ -389,6 +473,8 @@ const MainDashboard: React.FC = () => {
               systemStatus={systemStatus}
               onBootstrapMise={handleBootstrapMise}
               isBootstrapping={isBootstrappingMise}
+              onCheckUpdate={handleCheckUpdate}
+              isCheckingUpdate={isCheckingUpdate}
             />
           )}
         </main>
@@ -406,6 +492,13 @@ const MainDashboard: React.FC = () => {
         onSetGlobal={() => {
           handleSetGlobalVersion(installModalState.toolId, installModalState.version);
         }}
+      />
+
+      {/* Software Update Modal */}
+      <UpdateModal
+        isOpen={updateState.isOpen}
+        updateInfo={updateState.updateInfo}
+        onClose={() => setUpdateState((prev) => ({ ...prev, isOpen: false }))}
       />
     </div>
   );
