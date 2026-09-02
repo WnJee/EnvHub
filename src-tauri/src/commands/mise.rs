@@ -271,6 +271,53 @@ fn parse_version_output(_tool_id: &str, output: &str) -> Option<String> {
     None
 }
 
+/// Check if a version string is a valid semantic version (not 'latest', 'v1', 'lts')
+fn is_valid_semver(v: &str) -> bool {
+    let clean = v.trim().trim_start_matches('v');
+    if clean.is_empty() || clean == "latest" || clean == "lts" || clean == "system" {
+        return false;
+    }
+    clean.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) && clean.contains('.')
+}
+
+/// Deduplicate installed versions: Remove redundant prefix versions (e.g. "21.0" or "21" when "21.0.2" is installed)
+fn clean_and_deduplicate_installed_versions(raw_versions: Vec<String>) -> Vec<String> {
+    let mut semvers: Vec<String> = Vec::new();
+
+    for v in raw_versions {
+        let trimmed = v.trim().trim_start_matches('v').to_string();
+        if trimmed.is_empty() || trimmed == "latest" || trimmed == "lts" || trimmed == "system" {
+            continue;
+        }
+        if !trimmed.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) || !trimmed.contains('.') {
+            continue;
+        }
+        if !semvers.contains(&trimmed) {
+            semvers.push(trimmed);
+        }
+    }
+
+    // Filter out prefix versions if a more specific patch version exists
+    let mut final_versions: Vec<String> = Vec::new();
+    for v in &semvers {
+        let is_prefix_of_more_specific = semvers.iter().any(|other| {
+            other != v && other.starts_with(&format!("{}.", v))
+        });
+        if !is_prefix_of_more_specific {
+            final_versions.push(v.clone());
+        }
+    }
+
+    // Sort descending by semver components
+    final_versions.sort_by(|a, b| {
+        let a_parts: Vec<u64> = a.split('.').filter_map(|p| p.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok()).collect();
+        let b_parts: Vec<u64> = b.split('.').filter_map(|p| p.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok()).collect();
+        b_parts.cmp(&a_parts)
+    });
+
+    final_versions
+}
+
 #[tauri::command]
 pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
     // Ensure the latest prioritized PATH is active
@@ -327,14 +374,16 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
                     let raw_ver = if !stdout_str.trim().is_empty() { stdout_str } else { stderr_str };
 
                     if let Some(ver) = parse_version_output(meta.id, &raw_ver) {
-                        if !installed_versions.contains(&ver) {
-                            installed_versions.push(ver.clone());
+                        if is_valid_semver(&ver) {
+                            if !installed_versions.contains(&ver) {
+                                installed_versions.push(ver.clone());
+                            }
+                            if active_version.is_none() {
+                                active_version = Some(ver.clone());
+                                global_version = Some(ver);
+                            }
+                            break;
                         }
-                        if active_version.is_none() {
-                            active_version = Some(ver.clone());
-                            global_version = Some(ver);
-                        }
-                        break;
                     }
                 }
             }
@@ -349,9 +398,10 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
                         for entry in entries.flatten() {
                             if entry.path().is_dir() {
                                 if let Some(folder_name) = entry.file_name().to_str() {
-                                    let clean_v = parse_version_output(meta.id, folder_name).unwrap_or_else(|| folder_name.to_string());
-                                    if !clean_v.is_empty() && !installed_versions.contains(&clean_v) {
-                                        installed_versions.push(clean_v);
+                                    if let Some(clean_v) = parse_version_output(meta.id, folder_name) {
+                                        if is_valid_semver(&clean_v) && !installed_versions.contains(&clean_v) {
+                                            installed_versions.push(clean_v);
+                                        }
                                     }
                                 }
                             }
@@ -370,13 +420,16 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
                             if let Some(arr) = json_val.as_array() {
                                 for item in arr {
                                     if let Some(ver_str) = item.get("version").and_then(|v| v.as_str()) {
-                                        let clean_v = parse_version_output(meta.id, ver_str).unwrap_or_else(|| ver_str.to_string());
-                                        if !installed_versions.contains(&clean_v) {
-                                            installed_versions.push(clean_v.clone());
-                                        }
-                                        if item.get("active").and_then(|a| a.as_bool()).unwrap_or(false) {
-                                            active_version = Some(clean_v.clone());
-                                            global_version = Some(clean_v);
+                                        if let Some(clean_v) = parse_version_output(meta.id, ver_str) {
+                                            if is_valid_semver(&clean_v) {
+                                                if !installed_versions.contains(&clean_v) {
+                                                    installed_versions.push(clean_v.clone());
+                                                }
+                                                if item.get("active").and_then(|a| a.as_bool()).unwrap_or(false) {
+                                                    active_version = Some(clean_v.clone());
+                                                    global_version = Some(clean_v);
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -393,11 +446,13 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
                         let cur_str = String::from_utf8_lossy(&cur_out.stdout).trim().to_string();
                         if !cur_str.is_empty() && !cur_str.starts_with("No version") {
                             if let Some(clean_v) = parse_version_output(meta.id, &cur_str) {
-                                if !installed_versions.contains(&clean_v) {
-                                    installed_versions.push(clean_v.clone());
+                                if is_valid_semver(&clean_v) {
+                                    if !installed_versions.contains(&clean_v) {
+                                        installed_versions.push(clean_v.clone());
+                                    }
+                                    active_version = Some(clean_v.clone());
+                                    global_version = Some(clean_v);
                                 }
-                                active_version = Some(clean_v.clone());
-                                global_version = Some(clean_v);
                             }
                         }
                     }
@@ -438,14 +493,16 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
                                 if trim.starts_with(alias) && (trim.contains('=') || trim.contains(' ')) {
                                     let val = trim.split(|c: char| c == '=' || c.is_whitespace()).last().unwrap_or("").trim().trim_matches('"').trim_matches('\'');
                                     if let Some(clean_v) = parse_version_output(meta.id, val) {
-                                        if !installed_versions.contains(&clean_v) {
-                                            installed_versions.push(clean_v.clone());
-                                        }
-                                        if global_version.is_none() {
-                                            global_version = Some(clean_v.clone());
-                                        }
-                                        if active_version.is_none() {
-                                            active_version = Some(clean_v);
+                                        if is_valid_semver(&clean_v) {
+                                            if !installed_versions.contains(&clean_v) {
+                                                installed_versions.push(clean_v.clone());
+                                            }
+                                            if global_version.is_none() {
+                                                global_version = Some(clean_v.clone());
+                                            }
+                                            if active_version.is_none() {
+                                                active_version = Some(clean_v);
+                                            }
                                         }
                                     }
                                 }
@@ -456,15 +513,28 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
             }
         }
 
-        // 5. Final fallback: If versions are installed, ensure active_version and global_version are not None
-        if active_version.is_none() && !installed_versions.is_empty() {
-            if let Some(ref g) = global_version {
-                active_version = Some(g.clone());
-            } else {
-                let first = installed_versions[0].clone();
-                active_version = Some(first.clone());
-                global_version = Some(first);
+        // 5. Clean, validate and deduplicate installed versions
+        let installed_versions = clean_and_deduplicate_installed_versions(installed_versions);
+
+        // 6. Ensure active_version and global_version match an actual installed version
+        if let Some(ref act) = active_version {
+            let act_clean = act.trim().trim_start_matches('v');
+            if !installed_versions.contains(&act_clean.to_string()) {
+                // Find matching installed version that starts with act_clean or fallback
+                if let Some(matched) = installed_versions.iter().find(|iv| iv.starts_with(act_clean)) {
+                    active_version = Some(matched.clone());
+                    global_version = Some(matched.clone());
+                } else if !installed_versions.is_empty() {
+                    active_version = Some(installed_versions[0].clone());
+                    global_version = Some(installed_versions[0].clone());
+                } else {
+                    active_version = None;
+                    global_version = None;
+                }
             }
+        } else if !installed_versions.is_empty() {
+            active_version = Some(installed_versions[0].clone());
+            global_version = Some(installed_versions[0].clone());
         }
 
         // Fallback default curated versions if Mise ls-remote returned empty
@@ -651,16 +721,51 @@ pub async fn set_global_version(tool_id: String, version: String) -> Result<bool
 
 #[tauri::command]
 pub async fn uninstall_runtime_version(tool_id: String, version: String) -> Result<bool, String> {
-    if let Some(bin) = env_helper::find_mise_binary() {
-        let target = format!("{}@{}", tool_id, version);
-        let status = Command::new(&bin)
-            .args(["uninstall", &target])
-            .status()
-            .await
-            .map_err(|e| format!("无法执行 mise uninstall: {}", e))?;
+    let clean_ver = version.trim().trim_start_matches('v').to_string();
 
-        return Ok(status.success());
+    // 1. Run mise uninstall <tool>@<version>
+    if let Some(bin) = env_helper::find_mise_binary() {
+        let targets = [
+            format!("{}@{}", tool_id, clean_ver),
+            format!("{}@{}", tool_id, version),
+        ];
+        for target in targets {
+            let _ = Command::new(&bin)
+                .args(["uninstall", &target])
+                .status()
+                .await;
+        }
     }
+
+    // 2. Direct clean up directory ~/.local/share/mise/installs/<tool>/<version>
+    if let Some(home) = dirs::home_dir() {
+        let install_candidates = [
+            home.join(".local/share/mise/installs").join(&tool_id).join(&clean_ver),
+            home.join(".local/share/mise/installs").join(&tool_id).join(&version),
+            home.join(".local/share/mise/installs").join(&tool_id).join(format!("v{}", clean_ver)),
+        ];
+        for d in install_candidates {
+            if d.exists() {
+                let _ = std::fs::remove_dir_all(&d);
+            }
+        }
+
+        // Clean up from ~/.config/mise/config.toml
+        let config_file = home.join(".config/mise/config.toml");
+        if config_file.exists() {
+            if let Ok(content) = std::fs::read_to_string(&config_file) {
+                let lines: Vec<String> = content.lines()
+                    .filter(|l| {
+                        let trim = l.trim();
+                        !(trim.starts_with(&tool_id) && (trim.contains(&clean_ver) || trim.contains(&version)))
+                    })
+                    .map(|l| l.to_string())
+                    .collect();
+                let _ = std::fs::write(&config_file, lines.join("\n") + "\n");
+            }
+        }
+    }
+
     Ok(true)
 }
 

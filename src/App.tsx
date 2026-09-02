@@ -9,6 +9,7 @@ import { EnvHealth } from './components/EnvHealth';
 import { SettingsModal } from './components/SettingsModal';
 import { InstallModal } from './components/InstallModal';
 import { UpdateModal } from './components/UpdateModal';
+import { ConfirmModal } from './components/ConfirmModal';
 import { ToastProvider, useToast } from './components/Toast';
 import { api, isTauri } from './services/tauri';
 import { checkForUpdates, UpdateInfo, CURRENT_APP_VERSION } from './services/updater';
@@ -61,6 +62,17 @@ const MainDashboard: React.FC = () => {
     logs: [],
     progress: 0,
     status: 'idle'
+  });
+
+  // Delete Confirm Modal State
+  const [deleteTarget, setDeleteTarget] = useState<{
+    isOpen: boolean;
+    toolId: string;
+    version: string;
+  }>({
+    isOpen: false,
+    toolId: '',
+    version: '',
   });
 
   // Update Modal State
@@ -161,17 +173,26 @@ const MainDashboard: React.FC = () => {
     }
   };
 
-  const handleUninstallVersion = async (toolId: string, version: string) => {
-    if (!confirm(`确定要卸载 ${toolId} v${version} 吗？`)) return;
+  const handleUninstallVersion = (toolId: string, version: string) => {
+    setDeleteTarget({ isOpen: true, toolId, version });
+  };
+
+  const handleConfirmUninstall = async () => {
+    const { toolId, version } = deleteTarget;
+    setDeleteTarget({ isOpen: false, toolId: '', version: '' });
+
     try {
       if (!isTauri()) {
         toast.info('当前为浏览器预览模式，请在桌面端运行以执行卸载');
         return;
       }
+      toast.info(`正在卸载 ${toolId} v${version}...`);
       const ok = await api.uninstallVersion(toolId, version);
       if (ok) {
-        toast.success(`已卸载 ${toolId} v${version}`);
+        toast.success(`已成功卸载 ${toolId} v${version}`);
         loadAllData();
+      } else {
+        toast.error(`卸载 ${toolId} v${version} 失败`);
       }
     } catch (err) {
       toast.error(`卸载失败: ${err}`);
@@ -514,6 +535,15 @@ const MainDashboard: React.FC = () => {
         isOpen={updateState.isOpen}
         updateInfo={updateState.updateInfo}
         onClose={() => setUpdateState((prev) => ({ ...prev, isOpen: false }))}
+      />
+
+      {/* Delete / Uninstall Confirm Modal */}
+      <ConfirmModal
+        isOpen={deleteTarget.isOpen}
+        title={`确认卸载 ${deleteTarget.toolId} v${deleteTarget.version}`}
+        message={`卸载后本地已安装的 ${deleteTarget.toolId} v${deleteTarget.version} 将被彻底清理以释放磁盘空间。`}
+        onConfirm={handleConfirmUninstall}
+        onCancel={() => setDeleteTarget({ isOpen: false, toolId: '', version: '' })}
       />
     </div>
   );
