@@ -41,6 +41,18 @@ EnvHub 实现了**极低资源占用（常驻内存 ~30-50MB，安装包 ~10MB�
 
 ---
 
+## 🍎 macOS 安装提示「已损坏，无法打开」解决方式
+
+由于开源客户端未购买 Apple 商业开发者证书，首次从浏览器下载安装后 macOS Gatekeeper 会提示已损坏拦截。
+
+**解决办法**：将 EnvHub 拖入「应用程序」目录后，打开系统「终端 (Terminal)」，粘贴并执行以下命令即可解除拦截正常打开：
+```bash
+sudo xattr -rd com.apple.quarantine /Applications/EnvHub.app
+```
+或者在「系统设置」->「隐私与安全性」滚动到底部点击「仍要打开」。
+
+---
+
 ## 🏗️ 系统核心架构
 
 ```

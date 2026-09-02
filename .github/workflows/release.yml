@@ -15,7 +15,7 @@ jobs:
       matrix:
         include:
           - platform: 'macos-latest'
-            args: ''
+            args: '--target universal-apple-darwin'
           - platform: 'ubuntu-22.04'
             args: ''
           - platform: 'windows-latest'
@@ -28,6 +28,8 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Install dependencies (Ubuntu only)
         if: matrix.platform == 'ubuntu-22.04'
@@ -61,15 +63,25 @@ jobs:
             🚀 **EnvHub - 跨平台极速开发环境与版本管理套件**
 
             ### 📦 下载对应系统安装包：
-            - **macOS (Apple Silicon)**: `*.dmg`
-            - **Windows (x64)**: `*.msi` / `*.exe`
-            - **Linux (x64)**: `*.AppImage` / `*.deb`
+            - 🍏 **macOS (Universal 架构 - 同时兼容 Apple Silicon M系列与 Intel 芯片)**: `*.dmg`
+            - 🪟 **Windows (x64)**: `*.msi` / `*.exe`
+            - 🐧 **Linux (x64)**: `*.AppImage` / `*.deb`
+
+            ---
+
+            ### ⚠️ macOS 提示「已损坏，无法打开」解决办法：
+            由于开源客户端未购买 Apple 商业签名证书，首次从浏览器下载安装后 macOS Gatekeeper 会提示已损坏拦截。
+            请将软件拖入「应用程序」后，打开系统「终端 (Terminal)」，粘贴并执行以下命令即可正常秒开：
+            ```bash
+            sudo xattr -rd com.apple.quarantine /Applications/EnvHub.app
+            ```
+
+            ---
 
             ### ✨ 核心功能亮点：
-            - ⚡ **多语言极速管理**：真实探测并管理 Node.js、Python、Go、Rust、Java、Ruby、Bun、Deno、PHP 多版本
-            - 📁 **项目工程环境隔离**：深度支持 `.mise.toml` 与 `.tool-versions`，进入目录秒切版本
-            - 🛠️ **系统工具箱**：跨平台适配 Homebrew / Winget / Apt 底层依赖
-            - 🌐 **国内镜像源高速测速**：真实 TCP 延迟检测，一键写入 NPM / Pip / Cargo / GoProxy 加速
+            - ⚡ **多语言极速管理（18 种主流语言）**：Node.js、Python、Go、Rust、Java、Ruby、Bun、Deno、PHP、Zig、.NET、Dart、Flutter、Kotlin、Elixir、Erlang、Lua、Terraform
+            - 🛠️ **系统核心与数据库**：Git, Docker, Docker Compose, Nginx, Redis, MySQL, PostgreSQL, MongoDB, Ollama, gh, ripgrep, fd, lazygit 等
+            - 🌐 **国内镜像源高速测速**：NPM / Pip / Cargo / GoProxy / Docker Hub / Maven / Composer / RubyGems 一键加速
             - 🩺 **环境健康诊断**：实时排查并一键自动修复终端 Shell RC 与 Shims PATH
           releaseDraft: false
           prerelease: false
