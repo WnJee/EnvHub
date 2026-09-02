@@ -7,7 +7,8 @@ import {
   Wrench, 
   Terminal, 
   FileCode, 
-  RefreshCw 
+  RefreshCw,
+  Loader2
 } from 'lucide-react';
 import { useToast } from './Toast';
 
@@ -29,7 +30,8 @@ export const EnvHealth: React.FC<EnvHealthProps> = ({
     setFixingId(id);
     try {
       await onAutoFix(id);
-      toast.success('已自动向您的终端配置文件中写入激活脚本！');
+      toast.success('已自动向您的终端配置文件中写入激活脚本与 PATH，并同步当前环境！');
+      onRefresh();
     } catch (err) {
       toast.error(`自动修复失败: ${err}`);
     } finally {
@@ -140,7 +142,11 @@ export const EnvHealth: React.FC<EnvHealthProps> = ({
                     disabled={fixingId === item.id}
                     className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold shadow-md shadow-blue-500/20 transition-all flex items-center gap-1.5"
                   >
-                    <Wrench className={`w-3.5 h-3.5 ${fixingId === item.id ? 'animate-spin' : ''}`} />
+                    {fixingId === item.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                    ) : (
+                      <Wrench className="w-3.5 h-3.5" />
+                    )}
                     <span>{fixingId === item.id ? '正在写入...' : '一键自动修复'}</span>
                   </button>
                 )}

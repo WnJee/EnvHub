@@ -6,7 +6,8 @@ import {
   Download, 
   CheckCircle2, 
   ShieldCheck,
-  AlertTriangle
+  AlertTriangle,
+  Loader2
 } from 'lucide-react';
 import { useToast } from './Toast';
 
@@ -122,7 +123,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             disabled={isBootstrapping}
             className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold shadow-md shadow-blue-500/20 flex items-center gap-2 transition-all shrink-0"
           >
-            <Download className={`w-3.5 h-3.5 ${isBootstrapping ? 'animate-spin' : ''}`} />
+            {isBootstrapping ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+            ) : (
+              <Download className="w-3.5 h-3.5" />
+            )}
             <span>{isBootstrapping ? '正在自举安装...' : '一键自举安装'}</span>
           </button>
         </div>

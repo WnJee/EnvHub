@@ -77,10 +77,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside className="w-64 bg-[#0B1120] border-r border-slate-800/80 flex flex-col justify-between shrink-0 select-none">
-      {/* Brand Header */}
+      {/* Brand Header with macOS Traffic Lights Clearance */}
       <div>
-        <div className="h-16 flex items-center gap-3 px-5 border-b border-slate-800/80">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-400 flex items-center justify-center shadow-lg shadow-blue-500/20 text-white font-bold">
+        <div className="h-7 w-full shrink-0" data-tauri-drag-region />
+        <div className="h-14 flex items-center gap-3 px-5 border-b border-slate-800/80" data-tauri-drag-region>
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-cyan-400 flex items-center justify-center shadow-lg shadow-blue-500/20 text-white font-bold shrink-0">
             <Cpu className="w-5 h-5" />
           </div>
           <div>

@@ -27,7 +27,7 @@ export const Header: React.FC<HeaderProps> = ({
   const inDesktop = isTauri();
 
   return (
-    <header className="h-16 border-b border-slate-800/80 bg-[#0B1120]/90 backdrop-blur-md px-6 flex items-center justify-between shrink-0 select-none">
+    <header className="h-[5.25rem] pt-7 border-b border-slate-800/80 bg-[#0B1120]/90 backdrop-blur-md px-6 flex items-center justify-between shrink-0 select-none" data-tauri-drag-region>
       {/* Title & Subtitle */}
       <div>
         <h1 className="text-base font-bold text-slate-100 flex items-center gap-2">

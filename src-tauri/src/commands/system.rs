@@ -239,15 +239,17 @@ pub async fn install_system_tool(tool_id: String) -> Result<bool, String> {
 
 #[tauri::command]
 pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
-    let mut checks = Vec::new();
+    // 1. Refresh latest PATH in the current process
+    env_helper::fix_system_path();
 
-    // 1. Check Shell Activation
+    let mut checks = Vec::new();
     let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
     let mut rc_file = "~/.zshrc";
     let mut has_activation = false;
 
     if let Some(home) = dirs::home_dir() {
         let zshrc = home.join(".zshrc");
+        let zprofile = home.join(".zprofile");
         let bashrc = home.join(".bashrc");
 
         let target_rc = if shell.ends_with("bash") {
@@ -260,6 +262,13 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
 
         if target_rc.exists() {
             if let Ok(content) = fs::read_to_string(&target_rc) {
+                if content.contains("mise activate") || content.contains("rtx activate") {
+                    has_activation = true;
+                }
+            }
+        }
+        if !has_activation && zprofile.exists() {
+            if let Ok(content) = fs::read_to_string(&zprofile) {
                 if content.contains("mise activate") || content.contains("rtx activate") {
                     has_activation = true;
                 }
@@ -283,20 +292,37 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
 
     // 2. PATH priority check
     let path = env::var("PATH").unwrap_or_default();
-    let has_shims = path.contains(".local/share/mise/shims") || path.contains("mise");
+    let has_shims_in_path = path.contains(".local/share/mise/shims") || path.contains("mise/shims");
+
+    let mut has_shims_configured = has_shims_in_path || has_activation;
+    if let Some(home) = dirs::home_dir() {
+        let zshrc = home.join(".zshrc");
+        let zprofile = home.join(".zprofile");
+        let bashrc = home.join(".bashrc");
+        for rc in [&zshrc, &zprofile, &bashrc] {
+            if rc.exists() {
+                if let Ok(content) = fs::read_to_string(rc) {
+                    if content.contains("mise/shims") || content.contains("mise activate") {
+                        has_shims_configured = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
     checks.push(EnvHealthCheck {
         id: "path-priority".to_string(),
         title: "PATH 优先级与 Shims 注入检查".to_string(),
-        status: if has_shims { "ok".to_string() } else { "warning".to_string() },
-        message: if has_shims {
-            "mise shims 路径已注入系统 PATH，运行版本劫持正常".to_string()
+        status: if has_shims_configured { "ok".to_string() } else { "warning".to_string() },
+        message: if has_shims_configured {
+            "mise shims 路径已在系统 PATH 与终端配置中生效，运行版本劫持正常".to_string()
         } else {
-            "未在系统 PATH 中检测到 mise shims，建议在终端中加载环境变量".to_string()
+            "未在系统 PATH 中检测到 mise shims，点击一键自动修复注入环境变量".to_string()
         },
         shell: shell.clone(),
         config_file: "PATH Environment".to_string(),
-        can_auto_fix: false,
+        can_auto_fix: !has_shims_configured,
     });
 
     // 3. Package Manager
@@ -321,33 +347,62 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
 }
 
 #[tauri::command]
-pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
-    if check_id == "mise-activated" {
-        if let Some(home) = dirs::home_dir() {
-            let shell = env::var("SHELL").unwrap_or_default();
-            let rc_path = if shell.ends_with("bash") {
-                home.join(".bashrc")
-            } else {
-                home.join(".zshrc")
-            };
+pub async fn auto_fix_health_check(_check_id: String) -> Result<bool, String> {
+    if let Some(home) = dirs::home_dir() {
+        let shell = env::var("SHELL").unwrap_or_default();
+        let rc_path = if shell.ends_with("bash") {
+            home.join(".bashrc")
+        } else {
+            home.join(".zshrc")
+        };
+        let zprofile_path = home.join(".zprofile");
 
-            let activation_line = if shell.ends_with("bash") {
-                "\n# Mise Version Manager Hook\neval \"$(mise activate bash)\"\n"
-            } else {
-                "\n# Mise Version Manager Hook\neval \"$(mise activate zsh)\"\n"
-            };
+        // Ensure shims directory exists
+        let shims_dir = home.join(".local/share/mise/shims");
+        let _ = fs::create_dir_all(&shims_dir);
 
+        let mut fix_lines = Vec::new();
+        let existing_rc = fs::read_to_string(&rc_path).unwrap_or_default();
+
+        if !existing_rc.contains("mise/shims") {
+            fix_lines.push("\n# Mise Shims PATH\nexport PATH=\"$HOME/.local/share/mise/shims:$PATH\"\n");
+        }
+
+        if !existing_rc.contains("mise activate") && !existing_rc.contains("rtx activate") {
+            if shell.ends_with("bash") {
+                fix_lines.push("# Mise Version Manager Hook\neval \"$(mise activate bash)\"\n");
+            } else {
+                fix_lines.push("# Mise Version Manager Hook\neval \"$(mise activate zsh)\"\n");
+            }
+        }
+
+        if !fix_lines.is_empty() {
             let mut file = OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(rc_path)
-                .map_err(|e| format!("打开 Shell RC 失败: {}", e))?;
+                .open(&rc_path)
+                .map_err(|e| format!("打开 {} 失败: {}", rc_path.display(), e))?;
 
-            file.write_all(activation_line.as_bytes())
-                .map_err(|e| format!("写入 Shell RC 失败: {}", e))?;
-
-            return Ok(true);
+            for l in &fix_lines {
+                file.write_all(l.as_bytes())
+                    .map_err(|e| format!("写入 {} 失败: {}", rc_path.display(), e))?;
+            }
         }
+
+        // On macOS, also write to .zprofile if not present
+        #[cfg(target_os = "macos")]
+        {
+            let existing_profile = fs::read_to_string(&zprofile_path).unwrap_or_default();
+            if !existing_profile.contains("mise/shims") && !existing_profile.contains("mise activate") {
+                if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&zprofile_path) {
+                    let _ = f.write_all(b"\n# Mise PATH Hook\nexport PATH=\"$HOME/.local/share/mise/shims:$PATH\"\neval \"$(mise activate zsh)\"\n");
+                }
+            }
+        }
+
+        // Update current running process PATH
+        env_helper::fix_system_path();
+        return Ok(true);
     }
     Ok(true)
 }
