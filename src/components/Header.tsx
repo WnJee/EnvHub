@@ -1,6 +1,7 @@
 import React from 'react';
-import { Search, RefreshCw, CheckCircle2, AlertCircle, Apple, Monitor } from 'lucide-react';
+import { Search, RefreshCw, CheckCircle2, AlertCircle, Apple, Monitor, Globe, Laptop } from 'lucide-react';
 import { SystemStatus } from '../types';
+import { isTauri } from '../services/tauri';
 
 interface HeaderProps {
   title: string;
@@ -23,6 +24,8 @@ export const Header: React.FC<HeaderProps> = ({
   isRefreshing,
   onOpenBootstrap
 }) => {
+  const inDesktop = isTauri();
+
   return (
     <header className="h-16 border-b border-slate-800/80 bg-[#0B1120]/90 backdrop-blur-md px-6 flex items-center justify-between shrink-0 select-none">
       {/* Title & Subtitle */}
@@ -49,6 +52,19 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Right System Badges & Refresh */}
       <div className="flex items-center gap-3">
+        {/* Runtime Environment Badge */}
+        {inDesktop ? (
+          <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-400 text-xs font-medium">
+            <Laptop className="w-3.5 h-3.5" />
+            <span className="text-[11px]">Tauri 桌面原生</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-medium">
+            <Globe className="w-3.5 h-3.5" />
+            <span className="text-[11px]">浏览器预览模式</span>
+          </div>
+        )}
+
         {/* OS & Shell Chip */}
         <div className="hidden lg:flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-slate-300">
           {systemStatus.os === 'macos' ? (
