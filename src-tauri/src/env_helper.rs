@@ -5,7 +5,26 @@ use std::path::PathBuf;
 pub fn fix_system_path() {
     let mut paths: Vec<PathBuf> = Vec::new();
 
-    // Standard UNIX / Homebrew / Local paths
+    // 1. Highest priority: User version manager shims and local binaries
+    if let Some(home) = dirs::home_dir() {
+        let user_paths = [
+            home.join(".local/share/mise/shims"),
+            home.join(".local/share/mise/bin"),
+            home.join(".cargo/bin"),
+            home.join(".local/bin"),
+            home.join(".nvm/current/bin"),
+            home.join(".proto/shims"),
+            home.join(".proto/bin"),
+        ];
+
+        for up in user_paths {
+            if up.exists() && !paths.contains(&up) {
+                paths.push(up);
+            }
+        }
+    }
+
+    // 2. Standard UNIX / Homebrew paths
     let candidate_paths = [
         "/opt/homebrew/bin",
         "/opt/homebrew/sbin",
@@ -23,26 +42,7 @@ pub fn fix_system_path() {
         }
     }
 
-    // User home directory paths
-    if let Some(home) = dirs::home_dir() {
-        let user_paths = [
-            home.join(".local/bin"),
-            home.join(".cargo/bin"),
-            home.join(".local/share/mise/shims"),
-            home.join(".local/share/mise/bin"),
-            home.join(".proto/bin"),
-            home.join(".proto/shims"),
-            home.join(".nvm/versions/node/current/bin"),
-        ];
-
-        for up in user_paths {
-            if up.exists() && !paths.contains(&up) {
-                paths.push(up);
-            }
-        }
-    }
-
-    // Existing PATH
+    // 3. Existing PATH elements
     if let Ok(current_path) = env::var("PATH") {
         for split_path in env::split_paths(&current_path) {
             if !paths.contains(&split_path) {
@@ -58,33 +58,44 @@ pub fn fix_system_path() {
 
 /// Find the full path to the `mise` binary
 pub fn find_mise_binary() -> Option<PathBuf> {
-    // 1. Check if `mise` is in PATH
-    if let Ok(path) = which::which("mise") {
-        return Some(path);
+    // 1. Check user custom install locations first
+    if let Some(home) = dirs::home_dir() {
+        let candidates = [
+            home.join(".local/bin/mise"),
+            home.join(".local/share/mise/bin/mise"),
+            home.join(".cargo/bin/mise"),
+        ];
+        for c in candidates {
+            if c.exists() {
+                return Some(c);
+            }
+        }
     }
 
-    // 2. Check standard installation locations
-    let mut candidates = vec![
+    // 2. Check standard system locations
+    let sys_candidates = [
         PathBuf::from("/opt/homebrew/bin/mise"),
         PathBuf::from("/usr/local/bin/mise"),
         PathBuf::from("/usr/bin/mise"),
     ];
 
-    if let Some(home) = dirs::home_dir() {
-        candidates.push(home.join(".local/bin/mise"));
-        candidates.push(home.join(".cargo/bin/mise"));
-        candidates.push(home.join(".local/share/mise/bin/mise"));
-    }
-
-    // Windows standard locations
-    if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
-        candidates.push(PathBuf::from(local_app_data).join("mise\\bin\\mise.exe"));
-    }
-
-    for candidate in candidates {
+    for candidate in sys_candidates {
         if candidate.exists() {
             return Some(candidate);
         }
+    }
+
+    // 3. Check Windows standard locations
+    if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
+        let win_path = PathBuf::from(local_app_data).join("mise\\bin\\mise.exe");
+        if win_path.exists() {
+            return Some(win_path);
+        }
+    }
+
+    // 4. Check if `mise` is in PATH
+    if let Ok(path) = which::which("mise") {
+        return Some(path);
     }
 
     None

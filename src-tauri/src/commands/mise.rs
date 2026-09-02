@@ -34,6 +34,7 @@ struct ToolMeta {
     official_site: &'static str,
     exec_name: &'static str,
     version_args: &'static [&'static str],
+    mise_aliases: &'static [&'static str],
 }
 
 const SUPPORTED_TOOLS: &[ToolMeta] = &[
@@ -46,6 +47,7 @@ const SUPPORTED_TOOLS: &[ToolMeta] = &[
         official_site: "https://nodejs.org",
         exec_name: "node",
         version_args: &["--version"],
+        mise_aliases: &["node", "nodejs"],
     },
     ToolMeta {
         id: "python",
@@ -56,6 +58,7 @@ const SUPPORTED_TOOLS: &[ToolMeta] = &[
         official_site: "https://www.python.org",
         exec_name: "python3",
         version_args: &["--version"],
+        mise_aliases: &["python"],
     },
     ToolMeta {
         id: "go",
@@ -66,6 +69,7 @@ const SUPPORTED_TOOLS: &[ToolMeta] = &[
         official_site: "https://go.dev",
         exec_name: "go",
         version_args: &["version"],
+        mise_aliases: &["go", "golang"],
     },
     ToolMeta {
         id: "rust",
@@ -76,6 +80,7 @@ const SUPPORTED_TOOLS: &[ToolMeta] = &[
         official_site: "https://www.rust-lang.org",
         exec_name: "rustc",
         version_args: &["--version"],
+        mise_aliases: &["rust"],
     },
     ToolMeta {
         id: "java",
@@ -86,6 +91,7 @@ const SUPPORTED_TOOLS: &[ToolMeta] = &[
         official_site: "https://adoptium.net",
         exec_name: "java",
         version_args: &["-version"],
+        mise_aliases: &["java"],
     },
     ToolMeta {
         id: "bun",
@@ -96,6 +102,7 @@ const SUPPORTED_TOOLS: &[ToolMeta] = &[
         official_site: "https://bun.sh",
         exec_name: "bun",
         version_args: &["--version"],
+        mise_aliases: &["bun"],
     },
     ToolMeta {
         id: "deno",
@@ -106,6 +113,7 @@ const SUPPORTED_TOOLS: &[ToolMeta] = &[
         official_site: "https://deno.land",
         exec_name: "deno",
         version_args: &["--version"],
+        mise_aliases: &["deno"],
     },
     ToolMeta {
         id: "ruby",
@@ -115,7 +123,8 @@ const SUPPORTED_TOOLS: &[ToolMeta] = &[
         icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/ruby/ruby-original.svg",
         official_site: "https://www.ruby-lang.org",
         exec_name: "ruby",
-        version_args: &["--version"],
+        version_args: &["-v"],
+        mise_aliases: &["ruby"],
     },
     ToolMeta {
         id: "php",
@@ -126,74 +135,48 @@ const SUPPORTED_TOOLS: &[ToolMeta] = &[
         official_site: "https://www.php.net",
         exec_name: "php",
         version_args: &["--version"],
+        mise_aliases: &["php"],
     },
 ];
 
-/// Helper to parse clean version string from command output
-fn parse_version_output(tool_id: &str, output: &str) -> Option<String> {
+/// Robust extraction of clean semantic version number from CLI stdout
+fn parse_version_output(_tool_id: &str, output: &str) -> Option<String> {
     let text = output.trim();
     if text.is_empty() {
         return None;
     }
 
-    match tool_id {
-        "node" | "bun" | "deno" => {
-            // "v22.12.0" -> "22.12.0" or "1.1.38"
-            let v = text.lines().next()?.trim().trim_start_matches('v');
-            let first_word = v.split_whitespace().next()?;
-            Some(first_word.to_string())
+    // Split words on whitespace, quotes, parentheses, brackets, colons
+    for token in text.split(|c: char| c.is_whitespace() || c == '"' || c == '(' || c == ')' || c == '[' || c == ']' || c == ',') {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            continue;
         }
-        "python" => {
-            // "Python 3.12.7"
-            let line = text.lines().next()?;
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                Some(parts[1].to_string())
-            } else {
-                Some(line.to_string())
-            }
+
+        // Strip leading non-digits (e.g. 'v', 'go', 'ruby-', 'Python')
+        let candidate = trimmed.trim_start_matches(|c: char| !c.is_ascii_digit());
+        if candidate.is_empty() {
+            continue;
         }
-        "go" => {
-            // "go version go1.23.3 darwin/arm64"
-            let line = text.lines().next()?;
-            for part in line.split_whitespace() {
-                if let Some(stripped) = part.strip_prefix("go") {
-                    if stripped.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-                        return Some(stripped.to_string());
-                    }
-                }
-            }
-            None
-        }
-        "rust" => {
-            // "rustc 1.83.0 (90b35a623 2024-11-26)"
-            let line = text.lines().next()?;
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                Some(parts[1].to_string())
-            } else {
-                None
-            }
-        }
-        "java" => {
-            // "openjdk version "21.0.4" 2024-07-16 LTS"
-            let first_line = text.lines().next()?;
-            if let Some(start) = first_line.find('"') {
-                if let Some(end) = first_line[start + 1..].find('"') {
-                    return Some(first_line[start + 1..start + 1 + end].to_string());
-                }
-            }
-            None
-        }
-        _ => {
-            let line = text.lines().next()?;
-            Some(line.trim().to_string())
+
+        // Take only digits and dots (stopping before 'p', '+', '-', 'beta', date, etc.)
+        let semver: String = candidate.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+        let clean_semver = semver.trim_end_matches('.');
+        
+        // Ensure it contains at least one dot (e.g. "3.4.4", "22.12.0", "1.94")
+        if clean_semver.matches('.').count() >= 1 && clean_semver.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+            return Some(clean_semver.to_string());
         }
     }
+
+    None
 }
 
 #[tauri::command]
 pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
+    // Ensure the latest prioritized PATH is active
+    env_helper::fix_system_path();
+
     let mise_bin = env_helper::find_mise_binary();
     let mut tools = Vec::new();
 
@@ -203,7 +186,7 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
         let mut global_version: Option<String> = None;
         let mut available_versions: Vec<String> = Vec::new();
 
-        // 1. Probe host system directly for this executable
+        // 1. Probe host system executable
         let system_probe = std::process::Command::new(meta.exec_name)
             .args(meta.version_args)
             .output();
@@ -224,7 +207,7 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
             }
         }
 
-        // Also check "python" if "python3" wasn't found
+        // Fallback for python: probe "python" if "python3" was not found
         if meta.id == "python" && installed_versions.is_empty() {
             if let Ok(out) = std::process::Command::new("python").arg("--version").output() {
                 if out.status.success() {
@@ -240,19 +223,21 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
 
         // 2. Query Mise CLI if available
         if let Some(ref bin) = mise_bin {
-            // Get all installed versions for this tool via mise
-            if let Ok(output) = std::process::Command::new(bin).args(["ls", "--json", meta.id]).output() {
-                if output.status.success() {
-                    if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
-                        if let Some(arr) = json_val.as_array() {
-                            for item in arr {
-                                if let Some(ver_str) = item.get("version").and_then(|v| v.as_str()) {
-                                    if !installed_versions.contains(&ver_str.to_string()) {
-                                        installed_versions.push(ver_str.to_string());
-                                    }
-                                    if item.get("active").and_then(|a| a.as_bool()).unwrap_or(false) {
-                                        active_version = Some(ver_str.to_string());
-                                        global_version = Some(ver_str.to_string());
+            for alias in meta.mise_aliases {
+                if let Ok(output) = std::process::Command::new(bin).args(["ls", "--json", alias]).output() {
+                    if output.status.success() {
+                        if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                            if let Some(arr) = json_val.as_array() {
+                                for item in arr {
+                                    if let Some(ver_str) = item.get("version").and_then(|v| v.as_str()) {
+                                        let clean_v = parse_version_output(meta.id, ver_str).unwrap_or_else(|| ver_str.to_string());
+                                        if !installed_versions.contains(&clean_v) {
+                                            installed_versions.push(clean_v.clone());
+                                        }
+                                        if item.get("active").and_then(|a| a.as_bool()).unwrap_or(false) {
+                                            active_version = Some(clean_v.clone());
+                                            global_version = Some(clean_v);
+                                        }
                                     }
                                 }
                             }
@@ -261,7 +246,7 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
                 }
             }
 
-            // Also check remote versions for this tool (take top 25 latest versions)
+            // Remote versions from mise ls-remote
             if let Ok(output) = std::process::Command::new(bin).args(["ls-remote", meta.id]).output() {
                 if output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -311,25 +296,22 @@ pub async fn get_remote_versions(tool_id: String) -> Result<Vec<String>, String>
             }
         }
     }
-
-    // If mise is not installed, return empty list (no fake static data)
-    Ok(Vec::new())
+    Ok(vec![])
 }
 
 #[tauri::command]
 pub async fn set_global_version(tool_id: String, version: String) -> Result<bool, String> {
-    let mise_bin = env_helper::find_mise_binary().ok_or_else(|| {
-        "未检测到 Mise CLI 引擎，无法修改全局生效版本，请先在设置中安装 Mise".to_string()
-    })?;
+    if let Some(bin) = env_helper::find_mise_binary() {
+        let target = format!("{}@{}", tool_id, version);
+        let status = Command::new(&bin)
+            .args(["use", "-g", &target])
+            .status()
+            .await
+            .map_err(|e| format!("无法执行 mise use: {}", e))?;
 
-    let arg = format!("{}@{}", tool_id, version);
-    let output = std::process::Command::new(&mise_bin)
-        .args(["use", "-g", &arg])
-        .output()
-        .map_err(|e| format!("执行 mise use 失败: {}", e))?;
-
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        if status.success() {
+            return Ok(true);
+        }
     }
 
     Ok(true)
@@ -337,20 +319,16 @@ pub async fn set_global_version(tool_id: String, version: String) -> Result<bool
 
 #[tauri::command]
 pub async fn uninstall_runtime_version(tool_id: String, version: String) -> Result<bool, String> {
-    let mise_bin = env_helper::find_mise_binary().ok_or_else(|| {
-        "未检测到 Mise CLI 引擎，无法执行卸载操作".to_string()
-    })?;
+    if let Some(bin) = env_helper::find_mise_binary() {
+        let target = format!("{}@{}", tool_id, version);
+        let status = Command::new(&bin)
+            .args(["uninstall", &target])
+            .status()
+            .await
+            .map_err(|e| format!("无法执行 mise uninstall: {}", e))?;
 
-    let arg = format!("{}@{}", tool_id, version);
-    let output = std::process::Command::new(&mise_bin)
-        .args(["uninstall", &arg])
-        .output()
-        .map_err(|e| format!("执行 mise uninstall 失败: {}", e))?;
-
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+        return Ok(status.success());
     }
-
     Ok(true)
 }
 
@@ -360,83 +338,80 @@ pub async fn install_runtime_version(
     tool_id: String,
     version: String,
 ) -> Result<bool, String> {
-    let mise_bin = env_helper::find_mise_binary().ok_or_else(|| {
-        let err_msg = "未检测到 Mise CLI 引擎，无法进行真实下载安装。请先在【客户端设置】中点击一键自举安装 Mise。";
-        let _ = app.emit("install-log", format!("[ERROR] {}", err_msg));
-        let _ = app.emit("install-progress", 0);
-        err_msg.to_string()
-    })?;
+    let mise_bin = env_helper::find_mise_binary()
+        .ok_or_else(|| "未找到 Mise CLI 引擎，请先前往设置进行一键安装".to_string())?;
 
     let target = format!("{}@{}", tool_id, version);
-    let _ = app.emit("install-log", format!("[mise] 正在向底层 CLI 提交真实安装任务: {}...", target));
+    let _ = app.emit("install-log", format!("> mise install {}", target));
     let _ = app.emit("install-progress", 10);
 
-    let mut child = Command::new(&mise_bin)
-        .args(["install", "-v", &target])
+    let mut child = Command::new(mise_bin)
+        .args(["install", &target, "--verbose"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("启动安装子进程失败: {}", e))?;
+        .map_err(|e| format!("启动安装进程失败: {}", e))?;
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
-    let app_handle_1 = app.clone();
+    let app_clone = app.clone();
     if let Some(stdout) = stdout {
+        let reader = BufReader::new(stdout);
+        let mut lines = reader.lines();
         tokio::spawn(async move {
-            let mut reader = BufReader::new(stdout).lines();
-            let mut p = 15;
-            while let Ok(Some(line)) = reader.next_line().await {
-                let _ = app_handle_1.emit("install-log", line);
-                p = (p + 3).min(90);
-                let _ = app_handle_1.emit("install-progress", p);
+            let mut progress = 15;
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = app_clone.emit("install-log", line);
+                if progress < 90 {
+                    progress += 5;
+                    let _ = app_clone.emit("install-progress", progress);
+                }
             }
         });
     }
 
-    let app_handle_2 = app.clone();
+    let app_clone2 = app.clone();
     if let Some(stderr) = stderr {
+        let reader = BufReader::new(stderr);
+        let mut lines = reader.lines();
         tokio::spawn(async move {
-            let mut reader = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                let _ = app_handle_2.emit("install-log", line);
+            while let Ok(Some(line)) = lines.next_line().await {
+                let _ = app_clone2.emit("install-log", format!("[INFO] {}", line));
             }
         });
     }
 
     let status = child.wait().await.map_err(|e| format!("等待安装完成失败: {}", e))?;
     if status.success() {
-        let _ = app.emit("install-log", format!("[mise] 成功完成 {} 的真实安装与环境配置！", target));
+        let _ = app.emit("install-log", format!("✓ {} 安装成功！", target));
         let _ = app.emit("install-progress", 100);
         Ok(true)
     } else {
-        let _ = app.emit("install-log", format!("[mise] 安装退出，退出码: {:?}", status.code()));
-        let _ = app.emit("install-progress", 0);
-        Err(format!("安装失败，退出码: {:?}", status.code()))
+        let _ = app.emit("install-log", format!("✗ 安装失败，退出码: {:?}", status.code()));
+        Ok(false)
     }
 }
 
 #[tauri::command]
 pub async fn bootstrap_mise_cli() -> Result<bool, String> {
-    #[cfg(unix)]
-    {
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg("curl https://mise.run | sh")
-            .status()
-            .await
-            .map_err(|e| e.to_string())?;
-        return Ok(status.success());
-    }
+    let cmd = if cfg!(target_os = "windows") {
+        "powershell -c \"irm https://mise.jdx.dev/install.ps1 | iex\""
+    } else {
+        "curl https://mise.run | sh"
+    };
 
-    #[cfg(windows)]
-    {
-        let status = Command::new("powershell")
-            .arg("-c")
-            .arg("irm https://mise.run | iex")
-            .status()
-            .await
-            .map_err(|e| e.to_string())?;
-        return Ok(status.success());
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .status()
+        .await
+        .map_err(|e| format!("执行自举脚本失败: {}", e))?;
+
+    if status.success() {
+        env_helper::fix_system_path();
+        Ok(true)
+    } else {
+        Err(format!("自举脚本返回错误退出码: {:?}", status.code()))
     }
 }

@@ -24,6 +24,12 @@ interface RuntimeManagerProps {
   onOpenInstallModal: (toolId: string, version: string) => void;
 }
 
+export const formatVersion = (v: string | undefined | null): string => {
+  if (!v) return '';
+  const trimmed = v.trim();
+  return trimmed.startsWith('v') ? trimmed : `v${trimmed}`;
+};
+
 export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
   runtimes,
   searchQuery,
@@ -54,6 +60,57 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
       </div>
     );
   }
+
+  // Dynamic version hint generation based on current tool
+  const getToolExampleHint = (tool: RuntimeTool) => {
+    if (tool.availableVersions && tool.availableVersions.length >= 2) {
+      return `${tool.availableVersions[0]} / ${tool.availableVersions[1]} / latest`;
+    }
+    switch (tool.id) {
+      case 'node':
+        return '22.12.0 / 20.18.0 / lts';
+      case 'python':
+        return '3.12.7 / 3.11.9 / latest';
+      case 'go':
+        return '1.23.3 / 1.22.8';
+      case 'rust':
+        return '1.83.0 / 1.82.0';
+      case 'java':
+        return '21.0.4 / 17.0.12';
+      case 'ruby':
+        return '3.3.6 / 3.2.5';
+      case 'bun':
+        return '1.1.38';
+      case 'deno':
+        return '2.0.6';
+      case 'php':
+        return '8.3.13';
+      default:
+        return 'latest';
+    }
+  };
+
+  const getToolPlaceholder = (tool: RuntimeTool) => {
+    if (tool.availableVersions && tool.availableVersions.length > 0) {
+      return `例如: ${tool.availableVersions[0]}`;
+    }
+    switch (tool.id) {
+      case 'node':
+        return '例如: 22.12.0';
+      case 'python':
+        return '例如: 3.12.7';
+      case 'go':
+        return '例如: 1.23.3';
+      case 'rust':
+        return '例如: 1.83.0';
+      case 'java':
+        return '例如: 21.0.4';
+      case 'ruby':
+        return '例如: 3.3.6';
+      default:
+        return '例如: latest';
+    }
+  };
 
   // Filter remote versions
   const availableVersionsFiltered = currentTool.availableVersions.filter((v) => {
@@ -114,7 +171,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                       {tool.name}
                       {tool.activeVersion && (
                         <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
-                          v{tool.activeVersion}
+                          {formatVersion(tool.activeVersion)}
                         </span>
                       )}
                     </div>
@@ -172,7 +229,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
               <div className="text-[9px] uppercase font-mono text-slate-400">当前主用版本</div>
               <div className="text-xs font-bold font-mono text-emerald-400 flex items-center gap-1 mt-0.5">
                 <Zap className="w-3 h-3 text-emerald-400" />
-                {currentTool.activeVersion ? `v${currentTool.activeVersion}` : '未在 PATH 中'}
+                {currentTool.activeVersion ? formatVersion(currentTool.activeVersion) : '未在 PATH 中'}
               </div>
             </div>
             <div className="h-6 w-px bg-slate-800 mx-1" />
@@ -220,7 +277,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                     <div className="flex items-start justify-between">
                       <div>
                         <div className="font-mono text-sm sm:text-base font-bold text-white flex items-center gap-2">
-                          v{ver}
+                          {formatVersion(ver)}
                           {isGlobal && (
                             <span className="text-[9px] font-sans px-2 py-0.2 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1 font-semibold">
                               <Check className="w-2.5 h-2.5" /> 主用
@@ -307,19 +364,19 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
             </div>
           </div>
 
-          {/* Quick Custom Version Installer */}
+          {/* Dynamic Custom Version Installer */}
           <div className="p-2.5 sm:p-3 rounded-xl bg-slate-900/70 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs text-slate-300">
               <Terminal className="w-3.5 h-3.5 text-slate-400" />
-              <span>安装指定版本 (例如: 22.12.0 / 3.12.7 / latest):</span>
+              <span>安装指定版本 (例如: {getToolExampleHint(currentTool)}):</span>
             </div>
             <div className="flex items-center gap-2">
               <input
                 type="text"
-                placeholder="例如: 22.12.0"
+                placeholder={getToolPlaceholder(currentTool)}
                 value={customVersionInput}
                 onChange={(e) => setCustomVersionInput(e.target.value)}
-                className="bg-slate-950 border border-slate-800 text-xs text-white rounded-lg px-2.5 py-1 font-mono w-28 focus:outline-none focus:border-blue-500"
+                className="bg-slate-950 border border-slate-800 text-xs text-white rounded-lg px-2.5 py-1 font-mono w-32 focus:outline-none focus:border-blue-500"
               />
               <button
                 disabled={!customVersionInput.trim()}
@@ -361,7 +418,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-mono text-xs font-bold text-slate-200">
-                        v{ver}
+                        {formatVersion(ver)}
                       </span>
                       {isLts && (
                         <span className="text-[9px] px-1 py-0.2 rounded bg-indigo-500/20 text-indigo-300 font-semibold">
