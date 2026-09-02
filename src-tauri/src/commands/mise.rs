@@ -250,16 +250,23 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
             if let Ok(output) = std::process::Command::new(bin).args(["ls-remote", meta.id]).output() {
                 if output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout);
-                    let mut list: Vec<String> = stdout
+                    let raw_list: Vec<String> = stdout
                         .lines()
                         .map(|l| l.trim().to_string())
                         .filter(|l| !l.is_empty())
-                        .rev()
+                        .collect();
+                    let curated: Vec<String> = filter_latest_minor_versions(raw_list)
+                        .into_iter()
                         .take(25)
                         .collect();
-                    available_versions.append(&mut list);
+                    available_versions = curated;
                 }
             }
+        }
+
+        // Fallback default curated versions if Mise ls-remote returned empty
+        if available_versions.is_empty() {
+            available_versions = get_fallback_curated_versions(meta.id);
         }
 
         tools.push(RuntimeTool {
@@ -279,24 +286,119 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
     Ok(tools)
 }
 
+fn get_fallback_curated_versions(tool_id: &str) -> Vec<String> {
+    match tool_id {
+        "node" => vec![
+            "25.9.0".into(), "25.8.2".into(), "25.7.0".into(), "25.6.1".into(),
+            "24.1.0".into(), "24.0.2".into(), "23.9.0".into(), "22.14.0".into(),
+            "20.18.3".into(), "18.20.7".into(),
+        ],
+        "go" => vec![
+            "1.24.0".into(), "1.23.6".into(), "1.22.12".into(), "1.21.13".into(),
+            "1.20.14".into(), "1.19.13".into(),
+        ],
+        "python" => vec![
+            "3.13.2".into(), "3.12.9".into(), "3.11.11".into(), "3.10.16".into(),
+            "3.9.21".into(), "3.8.20".into(),
+        ],
+        "rust" => vec![
+            "1.85.0".into(), "1.84.1".into(), "1.83.0".into(), "1.82.0".into(),
+            "1.81.0".into(), "1.80.1".into(),
+        ],
+        "java" => vec![
+            "21.0.6".into(), "17.0.14".into(), "11.0.26".into(), "8.0.442".into(),
+        ],
+        "ruby" => vec![
+            "3.4.2".into(), "3.3.7".into(), "3.2.7".into(), "3.1.6".into(),
+        ],
+        "bun" => vec![
+            "1.2.4".into(), "1.1.43".into(), "1.0.36".into(),
+        ],
+        "deno" => vec![
+            "2.2.3".into(), "2.1.10".into(), "2.0.6".into(), "1.46.3".into(),
+        ],
+        "php" => vec![
+            "8.4.4".into(), "8.3.17".into(), "8.2.27".into(), "8.1.31".into(),
+        ],
+        _ => vec!["latest".into()],
+    }
+}
+
+/// Filters version list to only keep the latest patch version for each major.minor series
+/// e.g. ["25.8.0", "25.8.1", "25.8.2", "25.9.0"] -> ["25.9.0", "25.8.2"]
+fn filter_latest_minor_versions(versions: Vec<String>) -> Vec<String> {
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<(u64, u64), (u64, bool, String)> = BTreeMap::new();
+    let mut non_semver: Vec<String> = Vec::new();
+
+    for v in versions {
+        let trimmed = v.trim().trim_start_matches('v');
+        let parts: Vec<&str> = trimmed.split('.').collect();
+        if parts.len() >= 2 {
+            let major = parts[0].parse::<u64>();
+            let minor = parts[1].parse::<u64>();
+            let (patch, is_prerelease) = if parts.len() >= 3 {
+                let p_raw = parts[2];
+                let is_pre = p_raw.contains('-') || p_raw.contains("rc") || p_raw.contains("beta") || p_raw.contains("alpha");
+                let patch_num: u64 = p_raw.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
+                (patch_num, is_pre)
+            } else {
+                (0, false)
+            };
+
+            if let (Ok(maj), Ok(min)) = (major, minor) {
+                if let Some((existing_patch, existing_pre, _)) = groups.get(&(maj, min)) {
+                    if *existing_pre && !is_prerelease {
+                        groups.insert((maj, min), (patch, is_prerelease, v.clone()));
+                    } else if !is_prerelease && !existing_pre {
+                        if patch >= *existing_patch {
+                            groups.insert((maj, min), (patch, is_prerelease, v.clone()));
+                        }
+                    } else if is_prerelease && *existing_pre {
+                        if patch >= *existing_patch {
+                            groups.insert((maj, min), (patch, is_prerelease, v.clone()));
+                        }
+                    }
+                } else {
+                    groups.insert((maj, min), (patch, is_prerelease, v.clone()));
+                }
+                continue;
+            }
+        }
+        if !non_semver.contains(&v) {
+            non_semver.push(v);
+        }
+    }
+
+    let mut result: Vec<String> = groups.into_iter().rev().map(|(_, (_, _, ver))| ver).collect();
+    for item in non_semver {
+        if !result.contains(&item) {
+            result.push(item);
+        }
+    }
+    result
+}
+
 #[tauri::command]
 pub async fn get_remote_versions(tool_id: String) -> Result<Vec<String>, String> {
     if let Some(bin) = env_helper::find_mise_binary() {
         if let Ok(output) = std::process::Command::new(&bin).args(["ls-remote", &tool_id]).output() {
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                let list: Vec<String> = stdout
+                let raw_list: Vec<String> = stdout
                     .lines()
                     .map(|l| l.trim().to_string())
                     .filter(|l| !l.is_empty())
-                    .rev()
+                    .collect();
+                let curated: Vec<String> = filter_latest_minor_versions(raw_list)
+                    .into_iter()
                     .take(40)
                     .collect();
-                return Ok(list);
+                return Ok(curated);
             }
         }
     }
-    Ok(vec![])
+    Ok(get_fallback_curated_versions(&tool_id))
 }
 
 #[tauri::command]

@@ -30,6 +30,62 @@ export const formatVersion = (v: string | undefined | null): string => {
   return trimmed.startsWith('v') ? trimmed : `v${trimmed}`;
 };
 
+export const filterLatestMinorVersions = (versions: string[]): string[] => {
+  const groups = new Map<string, { patch: number; raw: string; isPrerelease: boolean }>();
+  const nonSemver: string[] = [];
+
+  for (const v of versions) {
+    const trimmed = v.trim().replace(/^v/, '');
+    const parts = trimmed.split('.');
+    if (parts.length >= 2) {
+      const maj = parseInt(parts[0], 10);
+      const min = parseInt(parts[1], 10);
+      if (!isNaN(maj) && !isNaN(min)) {
+        const key = `${maj}.${min}`;
+        const rawPatch = parts[2] || '0';
+        const isPrerelease = rawPatch.includes('-') || rawPatch.includes('rc') || rawPatch.includes('beta') || rawPatch.includes('alpha');
+        const match = rawPatch.match(/^\d+/);
+        const patchNum = match ? parseInt(match[0], 10) : 0;
+
+        const existing = groups.get(key);
+        if (!existing) {
+          groups.set(key, { patch: patchNum, raw: v, isPrerelease });
+        } else {
+          if (existing.isPrerelease && !isPrerelease) {
+            groups.set(key, { patch: patchNum, raw: v, isPrerelease });
+          } else if (!isPrerelease && !existing.isPrerelease) {
+            if (patchNum > existing.patch) {
+              groups.set(key, { patch: patchNum, raw: v, isPrerelease });
+            }
+          } else if (isPrerelease && existing.isPrerelease) {
+            if (patchNum > existing.patch) {
+              groups.set(key, { patch: patchNum, raw: v, isPrerelease });
+            }
+          }
+        }
+        continue;
+      }
+    }
+    if (!nonSemver.includes(v)) {
+      nonSemver.push(v);
+    }
+  }
+
+  const sorted = Array.from(groups.entries())
+    .map(([key, val]) => {
+      const [maj, min] = key.split('.').map(Number);
+      return { maj, min, patch: val.patch, raw: val.raw };
+    })
+    .sort((a, b) => {
+      if (a.maj !== b.maj) return b.maj - a.maj;
+      if (a.min !== b.min) return b.min - a.min;
+      return b.patch - a.patch;
+    })
+    .map((item) => item.raw);
+
+  return [...sorted, ...nonSemver];
+};
+
 export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
   runtimes,
   searchQuery,
@@ -68,23 +124,23 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
     }
     switch (tool.id) {
       case 'node':
-        return '22.12.0 / 20.18.0 / lts';
+        return '25.9.0 / 25.8.2 / lts';
       case 'python':
-        return '3.12.7 / 3.11.9 / latest';
+        return '3.13.2 / 3.12.9 / latest';
       case 'go':
-        return '1.23.3 / 1.22.8';
+        return '1.24.0 / 1.23.6';
       case 'rust':
-        return '1.83.0 / 1.82.0';
+        return '1.85.0 / 1.84.1';
       case 'java':
-        return '21.0.4 / 17.0.12';
+        return '21.0.6 / 17.0.14';
       case 'ruby':
-        return '3.3.6 / 3.2.5';
+        return '3.4.2 / 3.3.7';
       case 'bun':
-        return '1.1.38';
+        return '1.2.4 / 1.1.43';
       case 'deno':
-        return '2.0.6';
+        return '2.2.3 / 2.1.10';
       case 'php':
-        return '8.3.13';
+        return '8.4.4 / 8.3.17';
       default:
         return 'latest';
     }
@@ -96,24 +152,25 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
     }
     switch (tool.id) {
       case 'node':
-        return '例如: 22.12.0';
+        return '例如: 25.9.0';
       case 'python':
-        return '例如: 3.12.7';
+        return '例如: 3.13.2';
       case 'go':
-        return '例如: 1.23.3';
+        return '例如: 1.24.0';
       case 'rust':
-        return '例如: 1.83.0';
+        return '例如: 1.85.0';
       case 'java':
-        return '例如: 21.0.4';
+        return '例如: 21.0.6';
       case 'ruby':
-        return '例如: 3.3.6';
+        return '例如: 3.4.2';
       default:
         return '例如: latest';
     }
   };
 
-  // Filter remote versions
-  const availableVersionsFiltered = currentTool.availableVersions.filter((v) => {
+  // Filter and deduplicate remote versions to only highest patch per minor release
+  const curatedVersions = filterLatestMinorVersions(currentTool.availableVersions || []);
+  const availableVersionsFiltered = curatedVersions.filter((v) => {
     if (remoteSearch && !v.toLowerCase().includes(remoteSearch.toLowerCase())) {
       return false;
     }
