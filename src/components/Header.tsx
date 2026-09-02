@@ -1,9 +1,11 @@
 import React from 'react';
 import { Search, RefreshCw, CheckCircle2, AlertCircle, Apple, Monitor, Globe, Laptop } from 'lucide-react';
 import { SystemStatus } from '../types';
+import { TabType } from './Sidebar';
 import { isTauri } from '../services/tauri';
 
 interface HeaderProps {
+  currentTab: TabType;
   title: string;
   subtitle: string;
   systemStatus: SystemStatus;
@@ -15,6 +17,7 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({
+  currentTab,
   title,
   subtitle,
   systemStatus,
@@ -25,6 +28,17 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenBootstrap
 }) => {
   const inDesktop = isTauri();
+  const showSearch = currentTab === 'runtimes' || currentTab === 'system-tools';
+
+  const getSearchPlaceholder = () => {
+    if (currentTab === 'runtimes') {
+      return '搜索开发语言 (如 node, python, rust, zig)...';
+    }
+    if (currentTab === 'system-tools') {
+      return '搜索系统工具或数据库 (如 docker, redis, mysql)...';
+    }
+    return '搜索...';
+  };
 
   return (
     <header 
@@ -39,19 +53,23 @@ export const Header: React.FC<HeaderProps> = ({
         <p className="text-[11px] text-slate-400 truncate hidden sm:block" data-tauri-drag-region>{subtitle}</p>
       </div>
 
-      {/* Center Search */}
-      <div className="flex-1 max-w-xs min-w-[120px] mx-3 relative z-10">
-        <div className="relative">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-          <input
-            type="text"
-            placeholder="搜索运行时或工具..."
-            value={searchQuery}
-            onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full bg-slate-900/90 border border-slate-800 text-xs text-slate-200 placeholder-slate-400 rounded-xl pl-8 pr-3 py-1.5 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 transition-all cursor-text"
-          />
+      {/* Center Search - only visible on runtimes & system-tools */}
+      {showSearch ? (
+        <div className="flex-1 max-w-sm min-w-[140px] mx-3 relative z-10 animate-in fade-in duration-150">
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              placeholder={getSearchPlaceholder()}
+              value={searchQuery}
+              onChange={(e) => onSearchChange(e.target.value)}
+              className="w-full bg-slate-900/90 border border-slate-800 text-xs text-slate-200 placeholder-slate-400 rounded-xl pl-8 pr-3 py-1.5 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/30 transition-all cursor-text"
+            />
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="flex-1" data-tauri-drag-region />
+      )}
 
       {/* Right System Badges & Refresh */}
       <div className="flex items-center gap-2 shrink-0 relative z-10">

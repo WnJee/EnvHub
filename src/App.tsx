@@ -412,6 +412,7 @@ const MainDashboard: React.FC = () => {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Header */}
         <Header
+          currentTab={currentTab}
           title={tabTitles[currentTab]?.title || 'EnvHub'}
           subtitle={tabTitles[currentTab]?.subtitle || ''}
           systemStatus={systemStatus}
@@ -446,6 +447,7 @@ const MainDashboard: React.FC = () => {
           {currentTab === 'system-tools' && (
             <SystemTools
               systemTools={systemTools}
+              searchQuery={searchQuery}
               packageManager={systemStatus.packageManager}
               onInstallSystemTool={handleInstallSystemTool}
             />
