@@ -98,8 +98,19 @@ pub async fn open_installer_file(path: String) -> Result<bool, String> {
 pub async fn relaunch_application(_app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
+        let mut dest_app = PathBuf::from("/Applications/EnvHub.app");
+        if let Ok(mut exe) = std::env::current_exe() {
+            while let Some(parent) = exe.parent() {
+                if parent.extension().and_then(|s| s.to_str()) == Some("app") {
+                    dest_app = parent.to_path_buf();
+                    break;
+                }
+                exe = parent.to_path_buf();
+            }
+        }
+
         let _ = env_helper::create_silent_command("open")
-            .args(["-n", "-a", "/Applications/EnvHub.app"])
+            .args(["-n".as_ref(), "-a".as_ref(), dest_app.as_os_str()])
             .spawn();
         std::process::exit(0);
     }
@@ -107,7 +118,7 @@ pub async fn relaunch_application(_app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         if let Ok(exe) = std::env::current_exe() {
-            let _ = env_helper::create_silent_command(&exe.to_string_lossy()).spawn();
+            let _ = env_helper::create_silent_command(exe.to_str().unwrap_or_default()).spawn();
         }
         std::process::exit(0);
     }
@@ -115,7 +126,7 @@ pub async fn relaunch_application(_app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         if let Ok(exe) = std::env::current_exe() {
-            let _ = env_helper::create_silent_command(&exe.to_string_lossy()).spawn();
+            let _ = env_helper::create_silent_command(exe.to_str().unwrap_or_default()).spawn();
         }
         std::process::exit(0);
     }
@@ -198,75 +209,94 @@ pub async fn download_and_install_update(
 
     let _ = app.emit("update-download-progress", 92);
 
-    // Perform seamless in-place silent installation
+    // Perform seamless in-place silent replacement on macOS
     #[cfg(target_os = "macos")]
     {
-        let mount_point = PathBuf::from("/tmp/envhub_silent_update_mount");
-        let _ = env_helper::create_silent_command("hdiutil")
-            .args(["detach", &mount_point.to_string_lossy(), "-force", "-quiet"])
-            .status();
-        let _ = std::fs::remove_dir_all(&mount_point);
-        let _ = std::fs::create_dir_all(&mount_point);
+        // 1. Determine destination app path (current running bundle or /Applications/EnvHub.app)
+        let mut dest_app = PathBuf::from("/Applications/EnvHub.app");
+        if let Ok(mut exe) = std::env::current_exe() {
+            while let Some(parent) = exe.parent() {
+                if parent.extension().and_then(|s| s.to_str()) == Some("app") {
+                    dest_app = parent.to_path_buf();
+                    break;
+                }
+                exe = parent.to_path_buf();
+            }
+        }
 
-        let attach_status = env_helper::create_silent_command("hdiutil")
-            .args([
-                "attach",
-                &target_str,
-                "-mountpoint",
-                &mount_point.to_string_lossy(),
-                "-nobrowse",
-                "-readonly",
-                "-quiet",
-            ])
-            .status();
+        // 2. Mount DMG silently into a unique random mountpoint in /tmp
+        let mount_output = env_helper::create_silent_command("hdiutil")
+            .args(["attach", &target_str, "-nobrowse", "-readonly", "-mountrandom", "/tmp"])
+            .output();
 
-        let mut in_place_success = false;
-        if attach_status.map(|s| s.success()).unwrap_or(false) {
-            let src_app = mount_point.join("EnvHub.app");
-            if src_app.exists() {
-                let dest_app = PathBuf::from("/Applications/EnvHub.app");
-                let _ = std::fs::remove_dir_all(&dest_app);
-                let cp_status = env_helper::create_silent_command("cp")
-                    .args(["-R", &src_app.to_string_lossy(), "/Applications/"])
-                    .status();
+        let mut mounted_path: Option<PathBuf> = None;
 
-                if cp_status.map(|s| s.success()).unwrap_or(false) {
-                    let _ = env_helper::create_silent_command("xattr")
-                        .args(["-cr", "/Applications/EnvHub.app"])
-                        .status();
-                    in_place_success = true;
+        if let Ok(out) = mount_output {
+            if out.status.success() {
+                let stdout_str = String::from_utf8_lossy(&out.stdout);
+                for line in stdout_str.lines() {
+                    for token in line.split('\t') {
+                        let trimmed = token.trim();
+                        if trimmed.starts_with("/tmp/dmg.") || trimmed.starts_with("/Volumes/") {
+                            mounted_path = Some(PathBuf::from(trimmed));
+                        }
+                    }
                 }
             }
+        }
+
+        if let Some(ref mount_dir) = mounted_path {
+            // Find .app bundle inside mount directory
+            let mut src_app: Option<PathBuf> = None;
+            if mount_dir.join("EnvHub.app").exists() {
+                src_app = Some(mount_dir.join("EnvHub.app"));
+            } else if let Ok(entries) = std::fs::read_dir(mount_dir) {
+                for entry in entries.flatten() {
+                    if entry.path().extension().and_then(|s| s.to_str()) == Some("app") {
+                        src_app = Some(entry.path());
+                        break;
+                    }
+                }
+            }
+
+            if let Some(src) = src_app {
+                // Remove old bundle and copy new bundle with ditto (preserves signatures and extended attrs)
+                let _ = std::fs::remove_dir_all(&dest_app);
+                let ditto_status = env_helper::create_silent_command("ditto")
+                    .args([src.as_os_str(), dest_app.as_os_str()])
+                    .status();
+
+                if ditto_status.map(|s| s.success()).unwrap_or(false) {
+                    let _ = env_helper::create_silent_command("xattr")
+                        .args(["-cr".as_ref(), dest_app.as_os_str()])
+                        .status();
+                }
+            }
+
+            // Unmount DMG silently
             let _ = env_helper::create_silent_command("hdiutil")
-                .args(["detach", &mount_point.to_string_lossy(), "-force", "-quiet"])
+                .args(["detach".as_ref(), mount_dir.as_os_str(), "-force".as_ref(), "-quiet".as_ref()])
                 .status();
         }
 
-        if !in_place_success {
-            let _ = env_helper::create_silent_command("open")
-                .arg(&target_str)
-                .status();
-        }
+        // Clean up temporary downloaded DMG to save disk space
+        let _ = std::fs::remove_file(&target_file);
     }
 
+    // Windows NSIS silent in-place update
     #[cfg(target_os = "windows")]
     {
-        // Execute NSIS silent update
-        let silent_install = env_helper::create_silent_command(&target_str)
+        let _ = env_helper::create_silent_command(&target_str)
             .arg("/S")
             .status();
-        if !silent_install.map(|s| s.success()).unwrap_or(false) {
-            let _ = env_helper::create_silent_command("cmd")
-                .args(["/c", "start", "", &target_str])
-                .status();
-        }
     }
 
     #[cfg(target_os = "linux")]
     {
-        let _ = env_helper::create_silent_command("xdg-open")
-            .arg(&target_str)
-            .status();
+        // Linux AppImage replacement
+        if let Ok(exe) = std::env::current_exe() {
+            let _ = std::fs::copy(&target_file, &exe);
+        }
     }
 
     let _ = app.emit("update-download-progress", 100);
