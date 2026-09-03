@@ -288,6 +288,16 @@ export const api = {
     return true;
   },
 
+  // Relaunch the application after in-place update
+  async relaunchApp(): Promise<void> {
+    if (isTauri()) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('relaunch_application');
+    } else {
+      window.location.reload();
+    }
+  },
+
   // In-App Download and Launch Update Package
   async downloadAndInstallUpdate(
     downloadUrl: string,

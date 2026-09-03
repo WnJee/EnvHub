@@ -54,6 +54,7 @@ pub fn run() {
             download_and_install_update,
             open_path_in_file_manager,
             open_installer_file,
+            relaunch_application,
         ])
         .run(tauri::generate_context!())
         .expect("error while running envhub tauri application");

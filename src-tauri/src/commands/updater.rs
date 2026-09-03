@@ -95,6 +95,36 @@ pub async fn open_installer_file(path: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
+pub async fn relaunch_application(_app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = env_helper::create_silent_command("open")
+            .args(["-n", "-a", "/Applications/EnvHub.app"])
+            .spawn();
+        std::process::exit(0);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(exe) = std::env::current_exe() {
+            let _ = env_helper::create_silent_command(&exe.to_string_lossy()).spawn();
+        }
+        std::process::exit(0);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(exe) = std::env::current_exe() {
+            let _ = env_helper::create_silent_command(&exe.to_string_lossy()).spawn();
+        }
+        std::process::exit(0);
+    }
+
+    #[allow(unreachable_code)]
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn download_and_install_update(
     app: AppHandle,
     download_url: String,
@@ -145,7 +175,7 @@ pub async fn download_and_install_update(
                     for part in line.split_whitespace() {
                         if part.ends_with('%') {
                             if let Ok(p) = part.trim_end_matches('%').parse::<f32>() {
-                                progress = (p as u32).min(98);
+                                progress = (p as u32).min(90);
                                 let _ = app_clone.emit("update-download-progress", progress);
                             }
                         }
@@ -153,7 +183,7 @@ pub async fn download_and_install_update(
                 } else if line.contains('#') {
                     let count = line.chars().filter(|&c| c == '#').count();
                     if count > 0 {
-                        progress = (progress + (count as u32 * 2)).min(95);
+                        progress = (progress + (count as u32 * 2)).min(90);
                         let _ = app_clone.emit("update-download-progress", progress);
                     }
                 }
@@ -166,27 +196,80 @@ pub async fn download_and_install_update(
         return Err(format!("下载失败，请检查网络或在浏览器中下载，退出码: {:?}", status.code()));
     }
 
-    let _ = app.emit("update-download-progress", 100);
+    let _ = app.emit("update-download-progress", 92);
 
-    // Automatically trigger installation / open installer file
+    // Perform seamless in-place silent installation
     #[cfg(target_os = "macos")]
     {
-        let _ = env_helper::create_silent_command("open")
-            .arg(&target_str)
+        let mount_point = PathBuf::from("/tmp/envhub_silent_update_mount");
+        let _ = env_helper::create_silent_command("hdiutil")
+            .args(["detach", &mount_point.to_string_lossy(), "-force", "-quiet"])
             .status();
+        let _ = std::fs::remove_dir_all(&mount_point);
+        let _ = std::fs::create_dir_all(&mount_point);
+
+        let attach_status = env_helper::create_silent_command("hdiutil")
+            .args([
+                "attach",
+                &target_str,
+                "-mountpoint",
+                &mount_point.to_string_lossy(),
+                "-nobrowse",
+                "-readonly",
+                "-quiet",
+            ])
+            .status();
+
+        let mut in_place_success = false;
+        if attach_status.map(|s| s.success()).unwrap_or(false) {
+            let src_app = mount_point.join("EnvHub.app");
+            if src_app.exists() {
+                let dest_app = PathBuf::from("/Applications/EnvHub.app");
+                let _ = std::fs::remove_dir_all(&dest_app);
+                let cp_status = env_helper::create_silent_command("cp")
+                    .args(["-R", &src_app.to_string_lossy(), "/Applications/"])
+                    .status();
+
+                if cp_status.map(|s| s.success()).unwrap_or(false) {
+                    let _ = env_helper::create_silent_command("xattr")
+                        .args(["-cr", "/Applications/EnvHub.app"])
+                        .status();
+                    in_place_success = true;
+                }
+            }
+            let _ = env_helper::create_silent_command("hdiutil")
+                .args(["detach", &mount_point.to_string_lossy(), "-force", "-quiet"])
+                .status();
+        }
+
+        if !in_place_success {
+            let _ = env_helper::create_silent_command("open")
+                .arg(&target_str)
+                .status();
+        }
     }
+
     #[cfg(target_os = "windows")]
     {
-        let _ = env_helper::create_silent_command("cmd")
-            .args(["/c", "start", "", &target_str])
+        // Execute NSIS silent update
+        let silent_install = env_helper::create_silent_command(&target_str)
+            .arg("/S")
             .status();
+        if !silent_install.map(|s| s.success()).unwrap_or(false) {
+            let _ = env_helper::create_silent_command("cmd")
+                .args(["/c", "start", "", &target_str])
+                .status();
+        }
     }
+
     #[cfg(target_os = "linux")]
     {
         let _ = env_helper::create_silent_command("xdg-open")
             .arg(&target_str)
             .status();
     }
+
+    let _ = app.emit("update-download-progress", 100);
 
     Ok(target_str)
 }

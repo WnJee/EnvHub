@@ -9,7 +9,8 @@ import {
   CheckCircle2, 
   AlertCircle,
   Loader2,
-  RefreshCw
+  RefreshCw,
+  RotateCcw
 } from 'lucide-react';
 import { UpdateInfo } from '../services/updater';
 import { api } from '../services/tauri';
@@ -29,6 +30,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   const [progress, setProgress] = useState<number>(0);
   const [downloadedPath, setDownloadedPath] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string>('');
+  const [isRelaunching, setIsRelaunching] = useState<boolean>(false);
 
   if (!isOpen || !updateInfo || !updateInfo.hasUpdate) return null;
 
@@ -67,6 +69,16 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
       console.error('Download update error:', err);
       setErrorMsg(typeof err === 'string' ? err : err.message || '下载安装包失败');
       setDownloadStatus('error');
+    }
+  };
+
+  const handleRelaunch = async () => {
+    setIsRelaunching(true);
+    try {
+      await api.relaunchApp();
+    } catch (err) {
+      console.error('Relaunch error:', err);
+      setIsRelaunching(false);
     }
   };
 
@@ -137,7 +149,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                 <div className="flex items-center gap-2.5">
                   <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
                   <span className="text-xs sm:text-sm font-semibold text-white">
-                    正在应用内下载新版本安装包...
+                    {progress < 92 ? '正在应用内极速下载更新包...' : '正在静默安装与替换新版本...'}
                   </span>
                 </div>
                 <span className="text-xs font-mono font-bold text-blue-400">{progress}%</span>
@@ -150,7 +162,11 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                   style={{ width: `${progress}%` }}
                 />
               </div>
-              <p className="text-[11px] text-slate-400">下载完成后将自动为您打开安装包，请稍候...</p>
+              <p className="text-[11px] text-slate-400">
+                {progress < 92 
+                  ? '下载完成后将自动在应用内就地完成升级，无需手动拖拽安装包。'
+                  : '正在完成最后的程序包就地替换与权限配置，马上就绪...'}
+              </p>
             </div>
           )}
 
@@ -159,27 +175,38 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
             <div className="p-5 rounded-2xl bg-emerald-950/30 border border-emerald-500/30 space-y-3 animate-in fade-in">
               <div className="flex items-center gap-2.5 text-emerald-400">
                 <CheckCircle2 className="w-5 h-5 shrink-0" />
-                <span className="text-xs sm:text-sm font-semibold text-white">
-                  安装包下载完成并已自动打开！
+                <span className="text-xs sm:text-sm font-bold text-white">
+                  🎉 新版本已在应用内就绪！
                 </span>
               </div>
-              <div className="text-[11px] text-slate-300 font-mono bg-slate-900/90 p-2.5 rounded-xl border border-slate-800 break-all select-all">
-                {downloadedPath}
+              <p className="text-xs text-slate-300 leading-relaxed">
+                新版本已经完成就地安装与配置，立即重启应用即可直接使用最新版 EnvHub。
+              </p>
+              <div className="text-[10px] text-slate-400 font-mono bg-slate-900/90 p-2 rounded-lg border border-slate-800 truncate">
+                安装包来源: {downloadedPath}
               </div>
-              <div className="flex items-center gap-2 pt-1">
+              <div className="flex items-center gap-2 pt-1 flex-wrap">
                 <button
-                  onClick={handleOpenInstaller}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-md shadow-emerald-600/20"
+                  onClick={handleRelaunch}
+                  disabled={isRelaunching}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-bold flex items-center gap-2 transition-all shadow-lg shadow-blue-500/25 active:scale-95"
                 >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span>重新打开安装包</span>
+                  <RotateCcw className={`w-3.5 h-3.5 ${isRelaunching ? 'animate-spin' : ''}`} />
+                  <span>{isRelaunching ? '正在重启应用...' : '立即重启应用体验新版'}</span>
                 </button>
                 <button
                   onClick={handleOpenInFolder}
-                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center gap-1.5 transition-colors border border-slate-700"
+                  className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium flex items-center gap-1.5 transition-colors border border-slate-700"
                 >
                   <FolderOpen className="w-3.5 h-3.5 text-blue-400" />
-                  <span>在访达/文件夹中显示</span>
+                  <span>在文件夹中显示</span>
+                </button>
+                <button
+                  onClick={handleOpenInstaller}
+                  className="px-3 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-xs font-medium flex items-center gap-1.5 transition-colors border border-slate-800"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>手动打开安装包</span>
                 </button>
               </div>
             </div>
@@ -190,7 +217,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
             <div className="p-4 rounded-2xl bg-rose-950/30 border border-rose-500/30 space-y-2.5 animate-in fade-in">
               <div className="flex items-center gap-2 text-rose-400 text-xs font-semibold">
                 <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>应用内下载异常</span>
+                <span>应用内下载更新异常</span>
               </div>
               <p className="text-[11px] text-rose-300/80">{errorMsg || '网络连接超时或目标资源受限'}</p>
               <div className="flex items-center gap-2 pt-1">
@@ -198,7 +225,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                   onClick={handleStartInAppDownload}
                   className="px-3 py-1.5 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 text-xs font-semibold flex items-center gap-1.5 transition-all"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" /> 重试
+                  <RefreshCw className="w-3.5 h-3.5" /> 重试应用内更新
                 </button>
                 <button
                   onClick={handleOpenInBrowser}
@@ -236,9 +263,9 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
             {downloadStatus === 'completed' ? (
               <button
                 onClick={handleCloseModal}
-                className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold transition-colors"
+                className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors"
               >
-                完成
+                稍后重启
               </button>
             ) : (
               <>
@@ -257,12 +284,12 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
                   {downloadStatus === 'downloading' ? (
                     <>
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>正在下载 {progress}%</span>
+                      <span>正在更新 {progress}%</span>
                     </>
                   ) : (
                     <>
                       <Download className="w-3.5 h-3.5" />
-                      <span>立即应用内更新</span>
+                      <span>一键应用内更新并就绪</span>
                     </>
                   )}
                 </button>
