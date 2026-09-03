@@ -61,7 +61,7 @@ export const SystemTools: React.FC<SystemToolsProps> = ({
           </div>
           <h2 className="text-lg sm:text-xl font-bold text-white mt-1">系统核心基建、数据库与工具箱</h2>
           <p className="text-xs text-slate-400 mt-0.5 max-w-xl">
-            跨平台自动适配宿主包管理器 (macOS <code className="text-blue-400">Homebrew</code> / Windows <code className="text-blue-400">winget</code> / Linux <code className="text-blue-400">apt</code>)，管理 Docker、数据库与开发中间件。
+            跨平台自动适配宿主包管理器 (macOS/Linux <code className="text-blue-400">Homebrew</code> / Windows <code className="text-blue-400">Scoop / winget</code>)，统一管理系统级包管理器、开发中间件与基础环境。
           </p>
         </div>
 
@@ -79,7 +79,7 @@ export const SystemTools: React.FC<SystemToolsProps> = ({
         <div className="p-10 rounded-2xl bg-slate-900/40 border border-dashed border-slate-800 text-center space-y-2">
           <AlertCircle className="w-8 h-8 text-slate-500 mx-auto" />
           <h3 className="text-sm font-semibold text-slate-300">未找到匹配的系统工具</h3>
-          <p className="text-xs text-slate-500">可尝试搜索其他关键词如 docker, redis, mysql, nginx, ollama 等</p>
+          <p className="text-xs text-slate-500">可尝试搜索其他关键词如 brew, scoop, docker, redis, mysql, nginx 等</p>
         </div>
       ) : (
         /* System Tools Grid */
@@ -87,7 +87,11 @@ export const SystemTools: React.FC<SystemToolsProps> = ({
           {filteredTools.map((tool) => (
             <div
               key={tool.id}
-              className="p-4 rounded-2xl bg-slate-900/70 border border-slate-800 hover:border-slate-700 transition-all flex flex-col justify-between shadow-sm group"
+              className={`p-4 rounded-2xl bg-slate-900/70 border transition-all flex flex-col justify-between shadow-sm group ${
+                tool.category === 'Package Manager' || tool.category === '包管理器'
+                  ? 'border-amber-500/30 hover:border-amber-500/50 bg-gradient-to-b from-amber-950/10 to-slate-900/70'
+                  : 'border-slate-800 hover:border-slate-700'
+              }`}
             >
               <div>
                 <div className="flex items-start justify-between gap-2">
@@ -105,7 +109,11 @@ export const SystemTools: React.FC<SystemToolsProps> = ({
                     <div className="min-w-0">
                       <h3 className="text-xs sm:text-sm font-bold text-white flex items-center gap-1.5 truncate">
                         <span className="truncate">{tool.name}</span>
-                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 font-normal shrink-0">
+                        <span className={`text-[9px] font-mono px-1.5 py-0.2 rounded shrink-0 ${
+                          tool.category === 'Package Manager' || tool.category === '包管理器'
+                            ? 'bg-amber-500/15 text-amber-400 border border-amber-500/25 font-semibold'
+                            : 'bg-slate-800 text-slate-400 font-normal'
+                        }`}>
                           {tool.category}
                         </span>
                       </h3>
@@ -148,7 +156,11 @@ export const SystemTools: React.FC<SystemToolsProps> = ({
                 {tool.isInstalled ? (
                   <div className="text-xs font-mono text-slate-300 flex items-center gap-1.5 truncate">
                     <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    <span className="truncate">v{tool.installedVersion}</span>
+                    <span className="truncate">
+                      {tool.installedVersion?.startsWith('v') || tool.installedVersion?.includes(' ') 
+                        ? tool.installedVersion 
+                        : `v${tool.installedVersion}`}
+                    </span>
                   </div>
                 ) : (
                   <div className="text-[11px] text-slate-400">

@@ -127,7 +127,35 @@ pub async fn get_system_status() -> Result<SystemStatus, String> {
 
 #[tauri::command]
 pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
-    let mut tools = vec![
+    let mut tools = Vec::new();
+
+    #[cfg(not(target_os = "windows"))]
+    tools.push(SystemTool {
+        id: "brew".to_string(),
+        name: "Homebrew".to_string(),
+        description: "macOS 与 Linux 必备的终端软件包与命令行工具包管理器".to_string(),
+        category: "Package Manager".to_string(),
+        is_installed: false,
+        installed_version: None,
+        install_command: "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"".to_string(),
+        icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/homebrew/homebrew-original.svg".to_string(),
+        homepage: "https://brew.sh".to_string(),
+    });
+
+    #[cfg(target_os = "windows")]
+    tools.push(SystemTool {
+        id: "scoop".to_string(),
+        name: "Scoop".to_string(),
+        description: "Windows 极简、不污染系统注册表的命令行软件与开发环境包管理器".to_string(),
+        category: "Package Manager".to_string(),
+        is_installed: false,
+        installed_version: None,
+        install_command: "powershell -ExecutionPolicy RemoteSigned -Command \"irm get.scoop.sh | iex\"".to_string(),
+        icon: "https://raw.githubusercontent.com/ScoopInstaller/Scoop/master/packaging/scoop.ico".to_string(),
+        homepage: "https://scoop.sh".to_string(),
+    });
+
+    tools.extend(vec![
         SystemTool {
             id: "git".to_string(),
             name: "Git".to_string(),
@@ -337,7 +365,7 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
             icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/neovim/neovim-original.svg".to_string(),
             homepage: "https://neovim.io".to_string(),
         },
-    ];
+    ]);
 
     // Check installed status and real versions
     for tool in &mut tools {
@@ -351,6 +379,65 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
 }
 
 fn probe_tool_version(tool_id: &str) -> Option<String> {
+    if tool_id == "brew" || tool_id == "homebrew" {
+        for b in &["brew", "/opt/homebrew/bin/brew", "/usr/local/bin/brew", "/home/linuxbrew/.linuxbrew/bin/brew"] {
+            if let Ok(out) = env_helper::create_silent_command(b).arg("--version").output() {
+                if out.status.success() {
+                    let raw = String::from_utf8_lossy(&out.stdout);
+                    for word in raw.split(|c: char| c.is_whitespace() || c == '/' || c == '(' || c == ')' || c == ',') {
+                        let candidate = word.trim_start_matches(|c: char| !c.is_ascii_digit());
+                        let semver: String = candidate.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                        let clean = semver.trim_end_matches('.');
+                        if clean.contains('.') && clean.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                            return Some(clean.to_string());
+                        }
+                    }
+                    let first_line = raw.lines().next().unwrap_or("installed");
+                    return Some(first_line.trim().to_string());
+                }
+            }
+        }
+        return None;
+    }
+
+    if tool_id == "scoop" {
+        if let Ok(out) = env_helper::create_silent_command("scoop").arg("--version").output() {
+            if out.status.success() {
+                let raw = String::from_utf8_lossy(&out.stdout);
+                for word in raw.split_whitespace() {
+                    let candidate = word.trim_start_matches(|c: char| !c.is_ascii_digit());
+                    let semver: String = candidate.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                    let clean = semver.trim_end_matches('.');
+                    if clean.contains('.') && clean.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                        return Some(clean.to_string());
+                    }
+                }
+                return Some(raw.lines().next().unwrap_or("installed").trim().to_string());
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(out) = env_helper::create_silent_command("powershell")
+                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "scoop --version"])
+                .output()
+            {
+                if out.status.success() {
+                    let raw = String::from_utf8_lossy(&out.stdout);
+                    for word in raw.split_whitespace() {
+                        let candidate = word.trim_start_matches(|c: char| !c.is_ascii_digit());
+                        let semver: String = candidate.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                        let clean = semver.trim_end_matches('.');
+                        if clean.contains('.') && clean.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                            return Some(clean.to_string());
+                        }
+                    }
+                    return Some(raw.lines().next().unwrap_or("installed").trim().to_string());
+                }
+            }
+        }
+        return None;
+    }
+
     let (cmd, args): (&str, &[&str]) = match tool_id {
         "docker-compose" => ("docker-compose", &["--version"]),
         "nginx" => ("nginx", &["-v"]),
@@ -424,6 +511,43 @@ fn probe_tool_version(tool_id: &str) -> Option<String> {
 
 #[tauri::command]
 pub async fn test_system_tool(tool_id: String) -> Result<String, String> {
+    if tool_id == "brew" || tool_id == "homebrew" {
+        for b in &["brew", "/opt/homebrew/bin/brew", "/usr/local/bin/brew", "/home/linuxbrew/.linuxbrew/bin/brew"] {
+            if let Ok(output) = env_helper::create_silent_command(b).arg("--version").output() {
+                if output.status.success() {
+                    let out_str = String::from_utf8_lossy(&output.stdout);
+                    let first_line = out_str.lines().next().unwrap_or("执行正常").trim();
+                    return Ok(format!("测试成功: {}", first_line));
+                }
+            }
+        }
+        return Err("未检测到 Homebrew 可执行文件".to_string());
+    }
+
+    if tool_id == "scoop" {
+        if let Ok(output) = env_helper::create_silent_command("scoop").arg("--version").output() {
+            if output.status.success() {
+                let out_str = String::from_utf8_lossy(&output.stdout);
+                let first_line = out_str.lines().next().unwrap_or("执行正常").trim();
+                return Ok(format!("测试成功: {}", first_line));
+            }
+        }
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(output) = env_helper::create_silent_command("powershell")
+                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "scoop --version"])
+                .output()
+            {
+                if output.status.success() {
+                    let out_str = String::from_utf8_lossy(&output.stdout);
+                    let first_line = out_str.lines().next().unwrap_or("执行正常").trim();
+                    return Ok(format!("测试成功: {}", first_line));
+                }
+            }
+        }
+        return Err("未检测到 Scoop 命令".to_string());
+    }
+
     let binary_name = if tool_id == "neovim" { "nvim" } else if tool_id == "ripgrep" { "rg" } else { &tool_id };
     let output = env_helper::create_silent_command(binary_name)
         .arg("--version")
@@ -443,7 +567,9 @@ pub async fn test_system_tool(tool_id: String) -> Result<String, String> {
 pub async fn install_system_tool(tool_id: String) -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
-        let cmd = if tool_id == "docker" {
+        let cmd = if tool_id == "brew" || tool_id == "homebrew" {
+            "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"".to_string()
+        } else if tool_id == "docker" {
             "brew install --cask docker".to_string()
         } else {
             format!("brew install {}", tool_id)
@@ -462,22 +588,32 @@ pub async fn install_system_tool(tool_id: String) -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
+        let cmd = if tool_id == "scoop" {
+            "irm get.scoop.sh | iex".to_string()
+        } else {
+            format!("winget install --accept-source-agreements --accept-package-agreements {}", tool_id)
+        };
         let status = env_helper::create_silent_tokio_command("powershell")
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &format!("winget install --accept-source-agreements --accept-package-agreements {}", tool_id)])
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &cmd])
             .status()
             .await
-            .map_err(|e| format!("调用 Winget 失败: {}", e))?;
+            .map_err(|e| format!("调用安装工具失败: {}", e))?;
 
         if !status.success() {
-            return Err(format!("Winget 执行失败，退出码: {:?}", status.code()));
+            return Err(format!("安装执行失败，退出码: {:?}", status.code()));
         }
         return Ok(true);
     }
 
     #[cfg(target_os = "linux")]
     {
+        let cmd = if tool_id == "brew" || tool_id == "homebrew" {
+            "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"".to_string()
+        } else {
+            format!("sudo apt install -y {}", tool_id)
+        };
         let status = env_helper::create_silent_tokio_command("sh")
-            .args(["-c", &format!("sudo apt install -y {}", tool_id)])
+            .args(["-c", &cmd])
             .status()
             .await
             .map_err(|e| format!("调用 apt 失败: {}", e))?;
