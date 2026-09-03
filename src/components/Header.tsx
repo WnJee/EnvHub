@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, RefreshCw, CheckCircle2, AlertCircle, Apple, Monitor, Globe, Laptop } from 'lucide-react';
+import { Search, RefreshCw, CheckCircle2, AlertCircle, Apple, Monitor, Globe, Laptop, Share2 } from 'lucide-react';
 import { SystemStatus } from '../types';
 import { TabType } from './Sidebar';
 import { isTauri } from '../services/tauri';
@@ -14,6 +14,7 @@ interface HeaderProps {
   onRefresh: () => void;
   isRefreshing: boolean;
   onOpenBootstrap?: () => void;
+  onOpenExport?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -25,7 +26,8 @@ export const Header: React.FC<HeaderProps> = ({
   onSearchChange,
   onRefresh,
   isRefreshing,
-  onOpenBootstrap
+  onOpenBootstrap,
+  onOpenExport
 }) => {
   const inDesktop = isTauri();
   const showSearch = currentTab === 'runtimes' || currentTab === 'system-tools';
@@ -113,6 +115,18 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <AlertCircle className="w-3.5 h-3.5 text-amber-400" />
             <span className="text-[11px]">安装 Mise</span>
+          </button>
+        )}
+
+        {/* Export Script Button */}
+        {onOpenExport && (
+          <button
+            onClick={onOpenExport}
+            title="一键导出本机环境部署脚本 (macOS / Linux / Windows)"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-xs font-semibold shadow-sm transition-all shrink-0 hover:border-indigo-500/50"
+          >
+            <Share2 className="w-3.5 h-3.5 text-indigo-400" />
+            <span className="hidden sm:inline text-[11px]">导出环境脚本</span>
           </button>
         )}
 

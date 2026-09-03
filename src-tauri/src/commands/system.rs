@@ -674,3 +674,26 @@ pub async fn auto_fix_health_check(_check_id: String) -> Result<bool, String> {
     }
     Ok(true)
 }
+
+#[tauri::command]
+pub async fn save_export_file(filename: String, content: String) -> Result<String, String> {
+    let download_dir = dirs::download_dir().unwrap_or_else(|| {
+        dirs::home_dir()
+            .map(|h| h.join("Downloads"))
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+    });
+
+    let target_file = download_dir.join(&filename);
+    fs::write(&target_file, content.as_bytes())
+        .map_err(|e| format!("写入文件失败: {}", e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if filename.ends_with(".sh") {
+            let _ = fs::set_permissions(&target_file, fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    Ok(target_file.to_string_lossy().to_string())
+}

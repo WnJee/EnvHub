@@ -315,5 +315,25 @@ export const api = {
       }
     }
     throw new Error('请在桌面端运行以执行下载更新');
+  },
+
+  // Save Exported Script / Config File
+  async saveExportFile(filename: string, content: string): Promise<string> {
+    if (isTauri()) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke<string>('save_export_file', { filename, content });
+    }
+
+    // Web Fallback: trigger browser download
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    return `已触发浏览器下载: ${filename}`;
   }
 };

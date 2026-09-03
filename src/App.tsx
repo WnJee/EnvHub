@@ -10,6 +10,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { InstallModal } from './components/InstallModal';
 import { UpdateModal } from './components/UpdateModal';
 import { ConfirmModal } from './components/ConfirmModal';
+import { ExportModal } from './components/ExportModal';
 import { ToastProvider, useToast } from './components/Toast';
 import { api, isTauri } from './services/tauri';
 import { checkForUpdates, UpdateInfo, CURRENT_APP_VERSION } from './services/updater';
@@ -29,6 +30,7 @@ const MainDashboard: React.FC = () => {
   const [isPingingMirrors, setIsPingingMirrors] = useState<boolean>(false);
   const [isBootstrappingMise, setIsBootstrappingMise] = useState<boolean>(false);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState<boolean>(false);
+  const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
   const toast = useToast();
 
   // Core state from real host environment
@@ -454,6 +456,7 @@ const MainDashboard: React.FC = () => {
           onRefresh={() => loadAllData(true)}
           isRefreshing={isRefreshing}
           onOpenBootstrap={() => setCurrentTab('settings')}
+          onOpenExport={() => setIsExportModalOpen(true)}
         />
 
         {/* Content View */}
@@ -465,6 +468,7 @@ const MainDashboard: React.FC = () => {
               onSetGlobalVersion={handleSetGlobalVersion}
               onUninstallVersion={handleUninstallVersion}
               onOpenInstallModal={handleOpenInstallModal}
+              onOpenExport={() => setIsExportModalOpen(true)}
             />
           )}
 
@@ -544,6 +548,13 @@ const MainDashboard: React.FC = () => {
         message={`卸载后本地已安装的 ${deleteTarget.toolId} v${deleteTarget.version} 将被彻底清理以释放磁盘空间。`}
         onConfirm={handleConfirmUninstall}
         onCancel={() => setDeleteTarget({ isOpen: false, toolId: '', version: '' })}
+      />
+
+      {/* Export Environment Setup Scripts Modal */}
+      <ExportModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        runtimes={runtimes}
       />
     </div>
   );

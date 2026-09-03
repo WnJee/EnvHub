@@ -13,7 +13,8 @@ import {
   Terminal,
   Zap,
   Plus,
-  AlertCircle
+  AlertCircle,
+  Share2
 } from 'lucide-react';
 import { api } from '../services/tauri';
 import { useToast } from './Toast';
@@ -24,6 +25,7 @@ interface RuntimeManagerProps {
   onSetGlobalVersion: (toolId: string, version: string) => void;
   onUninstallVersion: (toolId: string, version: string) => void;
   onOpenInstallModal: (toolId: string, version: string) => void;
+  onOpenExport?: () => void;
 }
 
 export const formatVersion = (v: string | undefined | null): string => {
@@ -94,6 +96,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
   onSetGlobalVersion,
   onUninstallVersion,
   onOpenInstallModal,
+  onOpenExport
 }) => {
   const [selectedToolId, setSelectedToolId] = useState<string>(runtimes[0]?.id || 'node');
   const [versionFilter, setVersionFilter] = useState<'all' | 'installed' | 'lts'>('all');
@@ -208,6 +211,16 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
             <Layers className="w-3.5 h-3.5 text-blue-400" />
             开发语言 ({filteredRuntimes.length})
           </div>
+          {onOpenExport && (
+            <button
+              onClick={onOpenExport}
+              title="一键导出环境部署脚本"
+              className="p-1 rounded-lg text-slate-400 hover:text-indigo-400 hover:bg-slate-800/60 transition-colors flex items-center gap-1 text-[11px]"
+            >
+              <Share2 className="w-3.5 h-3.5 text-indigo-400" />
+              <span className="hidden sm:inline">导出</span>
+            </button>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1">

@@ -34,6 +34,7 @@ pub fn run() {
             install_system_tool,
             get_health_checks,
             auto_fix_health_check,
+            save_export_file,
 
             // Mirror commands
             get_mirrors,
