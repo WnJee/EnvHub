@@ -1,8 +1,17 @@
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Stdio;
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use crate::env_helper;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RemoteReleaseInfo {
+    pub tag_name: String,
+    pub body: String,
+    pub html_url: String,
+    pub published_at: String,
+}
 
 #[tauri::command]
 pub async fn open_url_in_browser(url: String) -> Result<bool, String> {
@@ -302,4 +311,74 @@ pub async fn download_and_install_update(
     let _ = app.emit("update-download-progress", 100);
 
     Ok(target_str)
+}
+
+#[tauri::command]
+pub async fn check_github_latest_release() -> Result<RemoteReleaseInfo, String> {
+    // 1. Try github API with User-Agent
+    if let Ok(out) = env_helper::create_silent_command("curl")
+        .args([
+            "-s",
+            "-H", "User-Agent: EnvHub-Desktop",
+            "-H", "Accept: application/vnd.github.v3+json",
+            "--max-time", "6",
+            "https://api.github.com/repos/WnJee/EnvHub/releases/latest"
+        ])
+        .output()
+    {
+        if out.status.success() {
+            let body = String::from_utf8_lossy(&out.stdout);
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&body) {
+                if let Some(tag) = val["tag_name"].as_str() {
+                    return Ok(RemoteReleaseInfo {
+                        tag_name: tag.to_string(),
+                        body: val["body"].as_str().unwrap_or("").to_string(),
+                        html_url: val["html_url"].as_str().unwrap_or("").to_string(),
+                        published_at: val["published_at"].as_str().unwrap_or("").to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    // 2. Fallback to releases.atom (Zero rate limits, always works)
+    if let Ok(out) = env_helper::create_silent_command("curl")
+        .args([
+            "-s",
+            "-L",
+            "--max-time", "8",
+            "https://github.com/WnJee/EnvHub/releases.atom"
+        ])
+        .output()
+    {
+        if out.status.success() {
+            let xml = String::from_utf8_lossy(&out.stdout);
+            if let Some(tag_idx) = xml.find("/releases/tag/") {
+                let rest = &xml[tag_idx + "/releases/tag/".len()..];
+                let tag: String = rest.chars().take_while(|c| *c != '"' && *c != '\'' && *c != '<' && !c.is_whitespace()).collect();
+                
+                let mut title = String::new();
+                if let Some(entry_start) = xml.find("<entry>") {
+                    let entry_xml = &xml[entry_start..];
+                    if let Some(et_start) = entry_xml.find("<title>") {
+                        let et_rest = &entry_xml[et_start + 7..];
+                        if let Some(et_end) = et_rest.find("</title>") {
+                            title = et_rest[..et_end].to_string();
+                        }
+                    }
+                }
+
+                if !tag.is_empty() {
+                    return Ok(RemoteReleaseInfo {
+                        tag_name: tag.clone(),
+                        body: if title.is_empty() { format!("EnvHub {}", tag) } else { title },
+                        html_url: format!("https://github.com/WnJee/EnvHub/releases/tag/{}", tag),
+                        published_at: "".to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    Err("无法获取 GitHub 最新版本信息".to_string())
 }

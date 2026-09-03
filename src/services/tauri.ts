@@ -298,6 +298,15 @@ export const api = {
     }
   },
 
+  // Check GitHub Latest Release via Backend
+  async checkGithubLatestRelease(): Promise<{ tag_name: string; body: string; html_url: string; published_at: string }> {
+    if (isTauri()) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke('check_github_latest_release');
+    }
+    throw new Error('Not in desktop environment');
+  },
+
   // In-App Download and Launch Update Package
   async downloadAndInstallUpdate(
     downloadUrl: string,
