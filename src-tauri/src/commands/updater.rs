@@ -118,15 +118,38 @@ pub async fn relaunch_application(_app: AppHandle) -> Result<(), String> {
             }
         }
 
-        let _ = env_helper::create_silent_command("open")
-            .args(["-n".as_ref(), "-a".as_ref(), dest_app.as_os_str()])
+        let script = format!(
+            "sleep 0.5 && open -n -a \"{}\"",
+            dest_app.to_string_lossy()
+        );
+        let _ = env_helper::create_silent_command("sh")
+            .args(["-c", &script])
             .spawn();
         std::process::exit(0);
     }
 
     #[cfg(target_os = "windows")]
     {
-        if let Ok(exe) = std::env::current_exe() {
+        let download_dir = dirs::download_dir().unwrap_or_else(|| PathBuf::from("C:\\"));
+        let mut installer_path: Option<PathBuf> = None;
+        if let Ok(entries) = std::fs::read_dir(&download_dir) {
+            for entry in entries.flatten() {
+                let fname = entry.file_name().to_string_lossy().to_string();
+                if fname.starts_with("EnvHub_") && fname.ends_with("_x64-setup.exe") {
+                    installer_path = Some(entry.path());
+                }
+            }
+        }
+
+        if let Some(inst) = installer_path {
+            let script = format!(
+                "Start-Sleep -Seconds 1; Start-Process -FilePath '{}' -ArgumentList '/S' -Wait",
+                inst.to_string_lossy()
+            );
+            let _ = env_helper::create_silent_command("powershell")
+                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
+                .spawn();
+        } else if let Ok(exe) = std::env::current_exe() {
             let _ = env_helper::create_silent_command(exe.to_str().unwrap_or_default()).spawn();
         }
         std::process::exit(0);
@@ -236,68 +259,94 @@ pub async fn download_and_install_update(
         // 2. Mount DMG silently into a unique random mountpoint in /tmp
         let mount_output = env_helper::create_silent_command("hdiutil")
             .args(["attach", &target_str, "-nobrowse", "-readonly", "-mountrandom", "/tmp"])
-            .output();
+            .output()
+            .map_err(|e| format!("挂载 DMG 更新包失败: {}", e))?;
+
+        if !mount_output.status.success() {
+            return Err(format!("挂载 DMG 失败: {}", String::from_utf8_lossy(&mount_output.stderr)));
+        }
 
         let mut mounted_path: Option<PathBuf> = None;
+        let stdout_str = String::from_utf8_lossy(&mount_output.stdout);
+        for line in stdout_str.lines() {
+            for token in line.split('\t') {
+                let trimmed = token.trim();
+                if (trimmed.contains("dmg.") || trimmed.starts_with("/Volumes/") || trimmed.starts_with("/private/tmp/") || trimmed.starts_with("/tmp/"))
+                    && std::path::Path::new(trimmed).is_dir()
+                {
+                    mounted_path = Some(PathBuf::from(trimmed));
+                    break;
+                }
+            }
+            if mounted_path.is_some() {
+                break;
+            }
+        }
 
-        if let Ok(out) = mount_output {
-            if out.status.success() {
-                let stdout_str = String::from_utf8_lossy(&out.stdout);
-                for line in stdout_str.lines() {
-                    for token in line.split('\t') {
-                        let trimmed = token.trim();
-                        if trimmed.starts_with("/tmp/dmg.") || trimmed.starts_with("/Volumes/") {
-                            mounted_path = Some(PathBuf::from(trimmed));
-                        }
-                    }
+        let mount_dir = match mounted_path {
+            Some(m) => m,
+            None => {
+                return Err("未能解析出 DMG 挂载点目录，请重试".to_string());
+            }
+        };
+
+        // Find .app bundle inside mount directory
+        let mut src_app: Option<PathBuf> = None;
+        if mount_dir.join("EnvHub.app").exists() {
+            src_app = Some(mount_dir.join("EnvHub.app"));
+        } else if let Ok(entries) = std::fs::read_dir(&mount_dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|s| s.to_str()) == Some("app") {
+                    src_app = Some(entry.path());
+                    break;
                 }
             }
         }
 
-        if let Some(ref mount_dir) = mounted_path {
-            // Find .app bundle inside mount directory
-            let mut src_app: Option<PathBuf> = None;
-            if mount_dir.join("EnvHub.app").exists() {
-                src_app = Some(mount_dir.join("EnvHub.app"));
-            } else if let Ok(entries) = std::fs::read_dir(mount_dir) {
-                for entry in entries.flatten() {
-                    if entry.path().extension().and_then(|s| s.to_str()) == Some("app") {
-                        src_app = Some(entry.path());
-                        break;
-                    }
-                }
-            }
-
-            if let Some(src) = src_app {
-                // Remove old bundle and copy new bundle with ditto (preserves signatures and extended attrs)
-                let _ = std::fs::remove_dir_all(&dest_app);
-                let ditto_status = env_helper::create_silent_command("ditto")
-                    .args([src.as_os_str(), dest_app.as_os_str()])
+        let src = match src_app {
+            Some(s) => s,
+            None => {
+                let _ = env_helper::create_silent_command("hdiutil")
+                    .args(["detach".as_ref(), mount_dir.as_os_str(), "-force".as_ref(), "-quiet".as_ref()])
                     .status();
-
-                if ditto_status.map(|s| s.success()).unwrap_or(false) {
-                    let _ = env_helper::create_silent_command("xattr")
-                        .args(["-cr".as_ref(), dest_app.as_os_str()])
-                        .status();
-                }
+                return Err("未在安装包镜像中找到 EnvHub.app".to_string());
             }
+        };
 
-            // Unmount DMG silently
+        // Use ditto to replace dest_app (preserves signatures, permissions and symlinks)
+        let ditto_status = env_helper::create_silent_command("ditto")
+            .args([src.as_os_str(), dest_app.as_os_str()])
+            .status();
+
+        let ditto_ok = match ditto_status {
+            Ok(s) => s.success(),
+            Err(e) => {
+                let _ = env_helper::create_silent_command("hdiutil")
+                    .args(["detach".as_ref(), mount_dir.as_os_str(), "-force".as_ref(), "-quiet".as_ref()])
+                    .status();
+                return Err(format!("执行 ditto 失败: {}", e));
+            }
+        };
+
+        if !ditto_ok {
             let _ = env_helper::create_silent_command("hdiutil")
                 .args(["detach".as_ref(), mount_dir.as_os_str(), "-force".as_ref(), "-quiet".as_ref()])
                 .status();
+            return Err("更新程序复制失败，请确认对应用程序目录具有写入权限".to_string());
         }
+
+        // Clear quarantine attributes
+        let _ = env_helper::create_silent_command("xattr")
+            .args(["-cr".as_ref(), dest_app.as_os_str()])
+            .status();
+
+        // Unmount DMG silently
+        let _ = env_helper::create_silent_command("hdiutil")
+            .args(["detach".as_ref(), mount_dir.as_os_str(), "-force".as_ref(), "-quiet".as_ref()])
+            .status();
 
         // Clean up temporary downloaded DMG to save disk space
         let _ = std::fs::remove_file(&target_file);
-    }
-
-    // Windows NSIS silent in-place update
-    #[cfg(target_os = "windows")]
-    {
-        let _ = env_helper::create_silent_command(&target_str)
-            .arg("/S")
-            .status();
     }
 
     #[cfg(target_os = "linux")]

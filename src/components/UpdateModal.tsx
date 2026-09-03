@@ -5,7 +5,6 @@ import {
   X, 
   Calendar, 
   ExternalLink, 
-  FolderOpen, 
   CheckCircle2, 
   AlertCircle,
   Loader2,
@@ -34,7 +33,6 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 }) => {
   const [downloadStatus, setDownloadStatus] = useState<'idle' | 'downloading' | 'completed' | 'error'>('idle');
   const [progress, setProgress] = useState<number>(0);
-  const [downloadedPath, setDownloadedPath] = useState<string>('');
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [isRelaunching, setIsRelaunching] = useState<boolean>(false);
 
@@ -63,12 +61,11 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     setErrorMsg('');
 
     try {
-      const destPath = await api.downloadAndInstallUpdate(
+      await api.downloadAndInstallUpdate(
         url,
         updateInfo.latestVersion,
         (p) => setProgress(p)
       );
-      setDownloadedPath(destPath);
       setDownloadStatus('completed');
       setProgress(100);
     } catch (err: any) {
@@ -85,18 +82,6 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     } catch (err) {
       console.error('Relaunch error:', err);
       setIsRelaunching(false);
-    }
-  };
-
-  const handleOpenInstaller = async () => {
-    if (downloadedPath) {
-      await api.openInstallerFile(downloadedPath);
-    }
-  };
-
-  const handleOpenInFolder = async () => {
-    if (downloadedPath) {
-      await api.openPathInFileManager(downloadedPath);
     }
   };
 
@@ -223,50 +208,28 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
           {/* Download & Installation Completed State */}
           {downloadStatus === 'completed' && (
             <div className="p-5 rounded-2xl bg-gradient-to-b from-emerald-950/40 via-slate-900 to-slate-900 border border-emerald-500/40 space-y-4 animate-in fade-in shadow-xl">
-              <div className="flex items-start gap-3">
-                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
-                  <CheckCircle2 className="w-5 h-5" />
+              <div className="flex items-start gap-3.5">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
+                  <CheckCircle2 className="w-6 h-6" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-bold text-white">
+                  <h4 className="text-sm sm:text-base font-bold text-white">
                     🎉 新版本已在应用内就绪！
                   </h4>
                   <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-                    最新版本程序包已在后台就地完成安全替换与授权，点击下方按钮立即重启即可体验全部新特性！
+                    新版本已在后台就地完成安全替换与授权，点击下方按钮立即重启即可生效并体验全部新特性！
                   </p>
                 </div>
               </div>
 
-              {downloadedPath && (
-                <div className="text-[10px] text-slate-400 font-mono bg-slate-950/90 p-2.5 rounded-xl border border-slate-800 truncate">
-                  更新缓存: {downloadedPath}
-                </div>
-              )}
-
-              <div className="flex items-center gap-2.5 pt-1 flex-wrap">
+              <div className="pt-1">
                 <button
                   onClick={handleRelaunch}
                   disabled={isRelaunching}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white text-xs font-bold flex items-center gap-2 transition-all shadow-lg shadow-emerald-500/25 active:scale-95"
+                  className="w-full py-3 px-5 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white text-sm font-bold flex items-center justify-center gap-2.5 transition-all shadow-lg shadow-emerald-500/25 active:scale-[0.99]"
                 >
                   <RotateCcw className={`w-4 h-4 ${isRelaunching ? 'animate-spin' : ''}`} />
                   <span>{isRelaunching ? '正在重启应用...' : '立即重启应用生效'}</span>
-                </button>
-
-                <button
-                  onClick={handleOpenInFolder}
-                  className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium flex items-center gap-1.5 transition-colors border border-slate-700"
-                >
-                  <FolderOpen className="w-3.5 h-3.5 text-blue-400" />
-                  <span>在文件夹中显示</span>
-                </button>
-
-                <button
-                  onClick={handleOpenInstaller}
-                  className="px-3 py-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-xs font-medium flex items-center gap-1.5 transition-colors border border-slate-800"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span>手动运行安装包</span>
                 </button>
               </div>
             </div>
