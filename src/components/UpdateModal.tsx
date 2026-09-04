@@ -26,6 +26,164 @@ interface UpdateModalProps {
   onClose: () => void;
 }
 
+const MarkdownViewer: React.FC<{ content: string; className?: string }> = ({ content, className = '' }) => {
+  if (!content) return null;
+
+  const lines = content.split('\n');
+
+  const renderInline = (text: string): React.ReactNode[] => {
+    const tokens: React.ReactNode[] = [];
+    let remaining = text;
+    let keyIdx = 0;
+
+    while (remaining.length > 0) {
+      const codeMatch = remaining.match(/`([^`]+)`/);
+      const boldMatch = remaining.match(/\*\*([^*]+)\*\*/);
+      const linkMatch = remaining.match(/\[([^\]]+)\]\(([^)]+)\)/);
+
+      type MatchInfo = { index: number; length: number; node: React.ReactNode };
+      let earliest: MatchInfo | null = null;
+
+      if (codeMatch && codeMatch.index !== undefined) {
+        earliest = {
+          index: codeMatch.index,
+          length: codeMatch[0].length,
+          node: (
+            <code
+              key={`code-${keyIdx++}`}
+              className="px-1.5 py-0.5 rounded bg-slate-800 text-cyan-300 font-mono text-[11px] border border-slate-700/60 inline-block mx-0.5"
+            >
+              {codeMatch[1]}
+            </code>
+          ),
+        };
+      }
+
+      if (boldMatch && boldMatch.index !== undefined) {
+        if (!earliest || boldMatch.index < earliest.index) {
+          earliest = {
+            index: boldMatch.index,
+            length: boldMatch[0].length,
+            node: (
+              <strong key={`bold-${keyIdx++}`} className="font-bold text-white tracking-wide">
+                {boldMatch[1]}
+              </strong>
+            ),
+          };
+        }
+      }
+
+      if (linkMatch && linkMatch.index !== undefined) {
+        if (!earliest || linkMatch.index < earliest.index) {
+          earliest = {
+            index: linkMatch.index,
+            length: linkMatch[0].length,
+            node: (
+              <a
+                key={`link-${keyIdx++}`}
+                href={linkMatch[2]}
+                target="_blank"
+                rel="noreferrer"
+                className="text-blue-400 hover:text-cyan-300 underline underline-offset-2 transition-colors inline-flex items-center gap-0.5"
+              >
+                {linkMatch[1]}
+              </a>
+            ),
+          };
+        }
+      }
+
+      if (earliest) {
+        if (earliest.index > 0) {
+          tokens.push(remaining.substring(0, earliest.index));
+        }
+        tokens.push(earliest.node);
+        remaining = remaining.substring(earliest.index + earliest.length);
+      } else {
+        tokens.push(remaining);
+        break;
+      }
+    }
+
+    return tokens;
+  };
+
+  return (
+    <div className={`space-y-2 text-xs leading-relaxed text-slate-300 ${className}`}>
+      {lines.map((rawLine, idx) => {
+        const line = rawLine.trim();
+        if (!line) {
+          return <div key={idx} className="h-1.5" />;
+        }
+
+        if (line.startsWith('# ')) {
+          return (
+            <h1 key={idx} className="text-base sm:text-lg font-bold text-white pt-2.5 pb-1 border-b border-slate-800">
+              {renderInline(line.slice(2))}
+            </h1>
+          );
+        }
+        if (line.startsWith('## ')) {
+          return (
+            <h2 key={idx} className="text-sm sm:text-base font-bold text-white pt-2 pb-1 border-b border-slate-800/80 flex items-center gap-1.5">
+              {renderInline(line.slice(3))}
+            </h2>
+          );
+        }
+        if (line.startsWith('### ')) {
+          return (
+            <h3 key={idx} className="text-xs sm:text-sm font-bold text-cyan-300 pt-2 pb-0.5 flex items-center gap-1.5">
+              {renderInline(line.slice(4))}
+            </h3>
+          );
+        }
+        if (line.startsWith('#### ')) {
+          return (
+            <h4 key={idx} className="text-xs font-bold text-slate-100 pt-1.5 pb-0.5 flex items-center gap-1">
+              {renderInline(line.slice(5))}
+            </h4>
+          );
+        }
+
+        if (line.startsWith('- ') || line.startsWith('* ')) {
+          return (
+            <div key={idx} className="flex items-start gap-2 pl-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 mt-1.5 shrink-0" />
+              <div className="flex-1 text-slate-300 leading-relaxed">{renderInline(line.slice(2))}</div>
+            </div>
+          );
+        }
+
+        const numMatch = line.match(/^(\d+)\.\s+(.*)/);
+        if (numMatch) {
+          return (
+            <div key={idx} className="flex items-start gap-2 pl-2">
+              <span className="text-[11px] font-mono font-bold text-cyan-400 shrink-0 mt-0.5">
+                {numMatch[1]}.
+              </span>
+              <div className="flex-1 text-slate-200 leading-relaxed">{renderInline(numMatch[2])}</div>
+            </div>
+          );
+        }
+
+        if (line.startsWith('> ')) {
+          return (
+            <blockquote key={idx} className="border-l-2 border-blue-500 pl-3 py-1 my-1 bg-blue-950/20 text-blue-200 rounded-r-lg text-xs italic">
+              {renderInline(line.slice(2))}
+            </blockquote>
+          );
+        }
+
+        return (
+          <p key={idx} className="text-slate-300 leading-relaxed">
+            {renderInline(line)}
+          </p>
+        );
+      })}
+    </div>
+  );
+};
+
 export const UpdateModal: React.FC<UpdateModalProps> = ({
   isOpen,
   updateInfo,
@@ -107,7 +265,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-xl bg-[#0C1222] border border-slate-700/80 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh] animate-in zoom-in-95 duration-150">
+      <div className="w-full max-w-2xl bg-[#0C1222] border border-slate-700/80 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh] animate-in zoom-in-95 duration-150">
         
         {/* Header with gradient badge */}
         <div className="p-5 sm:p-6 border-b border-slate-800/90 bg-gradient-to-r from-blue-950/50 via-indigo-950/30 to-slate-900 flex items-center justify-between shrink-0 relative overflow-hidden">
@@ -175,19 +333,24 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
         </div>
 
         {/* Body Content */}
-        <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4.5 bg-[#090D16]">
+        <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4 bg-[#090D16]">
           
           {/* Download in Progress State */}
           {downloadStatus === 'downloading' && (
-            <div className="p-5 rounded-2xl bg-gradient-to-b from-blue-950/40 to-slate-900 border border-blue-500/30 space-y-3.5 animate-in fade-in shadow-lg">
+            <div className="p-5 sm:p-6 rounded-2xl bg-gradient-to-b from-blue-950/50 via-slate-900 to-slate-900 border border-blue-500/30 space-y-4 animate-in fade-in shadow-xl">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <Loader2 className="w-4 h-4 text-cyan-400 animate-spin" />
-                  <span className="text-xs sm:text-sm font-bold text-white">
-                    {getStepText(progress)}
-                  </span>
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  </div>
+                  <div>
+                    <span className="text-xs sm:text-sm font-bold text-white block">
+                      {getStepText(progress)}
+                    </span>
+                    <span className="text-[11px] text-slate-400">正在应用内极速同步，请保持网络连接...</span>
+                  </div>
                 </div>
-                <span className="text-sm font-mono font-extrabold text-cyan-400">{progress}%</span>
+                <span className="text-sm font-mono font-extrabold text-cyan-400 bg-cyan-950/60 px-2.5 py-1 rounded-lg border border-cyan-500/20">{progress}%</span>
               </div>
 
               {/* Glowing Progress Bar */}
@@ -207,26 +370,26 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 
           {/* Download & Installation Completed State */}
           {downloadStatus === 'completed' && (
-            <div className="p-5 rounded-2xl bg-gradient-to-b from-emerald-950/40 via-slate-900 to-slate-900 border border-emerald-500/40 space-y-4 animate-in fade-in shadow-xl">
+            <div className="p-6 rounded-2xl bg-gradient-to-b from-emerald-950/40 via-slate-900 to-slate-900 border border-emerald-500/40 space-y-5 animate-in fade-in shadow-xl">
               <div className="flex items-start gap-3.5">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
+                <div className="w-11 h-11 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0 mt-0.5">
                   <CheckCircle2 className="w-6 h-6" />
                 </div>
                 <div>
-                  <h4 className="text-sm sm:text-base font-bold text-white">
-                    🎉 新版本已在应用内就绪！
+                  <h4 className="text-base font-bold text-white">
+                    🎉 新版本已在应用内完成更新就绪！
                   </h4>
                   <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-                    新版本已在后台就地完成安全替换与授权，点击下方按钮立即重启即可生效并体验全部新特性！
+                    最新版本程序已在后台完成就地安全替换与系统授权。点击下方按钮立即重启应用即可生效并体验全部新特性！
                   </p>
                 </div>
               </div>
 
-              <div className="pt-1">
+              <div className="pt-2">
                 <button
                   onClick={handleRelaunch}
                   disabled={isRelaunching}
-                  className="w-full py-3 px-5 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white text-sm font-bold flex items-center justify-center gap-2.5 transition-all shadow-lg shadow-emerald-500/25 active:scale-[0.99]"
+                  className="w-full py-3.5 px-5 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white text-sm font-bold flex items-center justify-center gap-2.5 transition-all shadow-lg shadow-emerald-500/25 active:scale-[0.99]"
                 >
                   <RotateCcw className={`w-4 h-4 ${isRelaunching ? 'animate-spin' : ''}`} />
                   <span>{isRelaunching ? '正在重启应用...' : '立即重启应用生效'}</span>
@@ -263,7 +426,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
           )}
 
           {/* Release Notes Section */}
-          <div className="space-y-2.5">
+          <div className="space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-xs font-bold uppercase tracking-wider text-slate-400 font-mono flex items-center gap-1.5">
                 <ShieldCheck className="w-3.5 h-3.5 text-blue-400" />
@@ -274,8 +437,8 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
               </span>
             </div>
 
-            <div className="p-4 sm:p-5 rounded-2xl bg-slate-950/80 border border-slate-800/90 text-xs text-slate-300 leading-relaxed font-sans whitespace-pre-wrap select-text max-h-60 overflow-y-auto space-y-2">
-              {updateInfo.releaseNotes}
+            <div className={`p-4 sm:p-5 rounded-2xl bg-slate-950/80 border border-slate-800/90 text-xs text-slate-300 leading-relaxed font-sans select-text overflow-y-auto space-y-2 ${downloadStatus === 'downloading' ? 'max-h-52' : 'max-h-72'}`}>
+              <MarkdownViewer content={updateInfo.releaseNotes || ''} />
             </div>
           </div>
         </div>
@@ -292,14 +455,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
           </button>
 
           <div className="flex items-center gap-2.5">
-            {downloadStatus === 'completed' ? (
-              <button
-                onClick={handleCloseModal}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors"
-              >
-                稍后手动重启
-              </button>
-            ) : (
+            {downloadStatus === 'completed' ? null : (
               <>
                 <button
                   onClick={handleCloseModal}

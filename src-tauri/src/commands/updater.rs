@@ -111,7 +111,10 @@ pub async fn relaunch_application(_app: AppHandle) -> Result<(), String> {
         if let Ok(mut exe) = std::env::current_exe() {
             while let Some(parent) = exe.parent() {
                 if parent.extension().and_then(|s| s.to_str()) == Some("app") {
-                    dest_app = parent.to_path_buf();
+                    let p = parent.to_path_buf();
+                    if !p.to_string_lossy().contains("AppTranslocation") {
+                        dest_app = p;
+                    }
                     break;
                 }
                 exe = parent.to_path_buf();
@@ -119,7 +122,8 @@ pub async fn relaunch_application(_app: AppHandle) -> Result<(), String> {
         }
 
         let script = format!(
-            "sleep 0.5 && open -n -a \"{}\"",
+            "sleep 0.8 && touch \"{}\" && open -n -F \"{}\"",
+            dest_app.to_string_lossy(),
             dest_app.to_string_lossy()
         );
         let _ = env_helper::create_silent_command("sh")
@@ -249,7 +253,10 @@ pub async fn download_and_install_update(
         if let Ok(mut exe) = std::env::current_exe() {
             while let Some(parent) = exe.parent() {
                 if parent.extension().and_then(|s| s.to_str()) == Some("app") {
-                    dest_app = parent.to_path_buf();
+                    let p = parent.to_path_buf();
+                    if !p.to_string_lossy().contains("AppTranslocation") {
+                        dest_app = p;
+                    }
                     break;
                 }
                 exe = parent.to_path_buf();
@@ -313,7 +320,14 @@ pub async fn download_and_install_update(
             }
         };
 
-        // Use ditto to replace dest_app (preserves signatures, permissions and symlinks)
+        // Atomic swap: rename old app out of the way first to avoid ETXTBSY file busy errors
+        let old_backup = dest_app.with_extension("old.app");
+        if dest_app.exists() {
+            let _ = std::fs::remove_dir_all(&old_backup);
+            let _ = std::fs::rename(&dest_app, &old_backup);
+        }
+
+        // Use ditto to copy new bundle (preserves signatures, permissions and symlinks)
         let ditto_status = env_helper::create_silent_command("ditto")
             .args([src.as_os_str(), dest_app.as_os_str()])
             .status();
@@ -324,7 +338,10 @@ pub async fn download_and_install_update(
                 let _ = env_helper::create_silent_command("hdiutil")
                     .args(["detach".as_ref(), mount_dir.as_os_str(), "-force".as_ref(), "-quiet".as_ref()])
                     .status();
-                return Err(format!("执行 ditto 失败: {}", e));
+                if old_backup.exists() && !dest_app.exists() {
+                    let _ = std::fs::rename(&old_backup, &dest_app);
+                }
+                return Err(format!("执行 ditto 复制失败: {}", e));
             }
         };
 
@@ -332,12 +349,21 @@ pub async fn download_and_install_update(
             let _ = env_helper::create_silent_command("hdiutil")
                 .args(["detach".as_ref(), mount_dir.as_os_str(), "-force".as_ref(), "-quiet".as_ref()])
                 .status();
+            if old_backup.exists() && !dest_app.exists() {
+                let _ = std::fs::rename(&old_backup, &dest_app);
+            }
             return Err("更新程序复制失败，请确认对应用程序目录具有写入权限".to_string());
         }
 
-        // Clear quarantine attributes
+        // Clean up old backup
+        let _ = std::fs::remove_dir_all(&old_backup);
+
+        // Clear quarantine attributes & touch to refresh Finder / LaunchServices cache
         let _ = env_helper::create_silent_command("xattr")
             .args(["-cr".as_ref(), dest_app.as_os_str()])
+            .status();
+        let _ = env_helper::create_silent_command("touch")
+            .args([dest_app.as_os_str()])
             .status();
 
         // Unmount DMG silently
