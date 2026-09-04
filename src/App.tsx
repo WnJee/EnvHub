@@ -307,12 +307,41 @@ const MainDashboard: React.FC = () => {
         toast.info('请在桌面端运行以调用系统包管理器');
         return;
       }
-      toast.info(`正在调用包管理器安装 ${toolId}...`);
-      const ok = await api.installSystemTool(toolId);
-      if (ok) {
-        toast.success(`成功安装系统工具: ${toolId}`);
-        loadAllData();
-      }
+      setInstallModalState({
+        isOpen: true,
+        toolId: toolId,
+        version: 'latest',
+        logs: [`[init] 正在启动系统包管理器部署 ${toolId}...`],
+        progress: 15,
+        status: 'running',
+      });
+      api.startInstallSystemTool(
+        toolId,
+        (log) => {
+          setInstallModalState((prev) => ({
+            ...prev,
+            logs: [...prev.logs, log],
+          }));
+        },
+        (progress) => {
+          setInstallModalState((prev) => ({
+            ...prev,
+            progress,
+          }));
+        }
+      ).then((success) => {
+        setInstallModalState((prev) => ({
+          ...prev,
+          status: success ? 'completed' : 'failed',
+          progress: success ? 100 : prev.progress,
+        }));
+        if (success) {
+          toast.success(`成功安装系统工具: ${toolId}`);
+          loadAllData();
+        } else {
+          toast.error(`安装 ${toolId} 失败，请查看日志详情`);
+        }
+      });
     } catch (err) {
       toast.error(`安装失败: ${err}`);
     }
@@ -366,13 +395,11 @@ const MainDashboard: React.FC = () => {
         toast.info('请在桌面端运行以自动写入终端配置');
         return;
       }
+      toast.info('正在自动配置并同步系统环境...');
       const ok = await api.autoFixHealthCheck(checkId);
       if (ok) {
-        setHealthChecks((prev) =>
-          prev.map((c) =>
-            c.id === checkId ? { ...c, status: 'ok', message: '已自动配置并生效' } : c
-          )
-        );
+        toast.success('已自动修复配置并同步系统环境！');
+        loadAllData();
       }
     } catch (err) {
       toast.error(`自动修复失败: ${err}`);
@@ -384,13 +411,43 @@ const MainDashboard: React.FC = () => {
     setIsBootstrappingMise(true);
     try {
       if (!isTauri()) {
-        toast.info('当前处于浏览器预览模式，请在终端执行 `curl https://mise.run | sh` 或在桌面端运行。');
+        toast.info('当前处于浏览器预览模式，请在桌面端运行。');
         return;
       }
-      toast.info('正在拉取并安装 Mise CLI 引擎...');
-      await api.installMiseCli();
-      toast.success('Mise CLI 引擎已安装就绪！');
-      loadAllData();
+      setInstallModalState({
+        isOpen: true,
+        toolId: 'mise',
+        version: 'cli',
+        logs: ['[init] 正在连接官方源部署 Mise CLI 引擎...'],
+        progress: 10,
+        status: 'running',
+      });
+      api.startBootstrapMise(
+        (log) => {
+          setInstallModalState((prev) => ({
+            ...prev,
+            logs: [...prev.logs, log],
+          }));
+        },
+        (progress) => {
+          setInstallModalState((prev) => ({
+            ...prev,
+            progress,
+          }));
+        }
+      ).then((success) => {
+        setInstallModalState((prev) => ({
+          ...prev,
+          status: success ? 'completed' : 'failed',
+          progress: success ? 100 : prev.progress,
+        }));
+        if (success) {
+          toast.success('Mise CLI 引擎已安装就绪！');
+          loadAllData();
+        } else {
+          toast.error('Mise CLI 引擎部署失败，请查看日志详情');
+        }
+      });
     } catch (err) {
       toast.error(`安装失败: ${err}`);
     } finally {

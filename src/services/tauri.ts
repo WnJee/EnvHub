@@ -189,12 +189,43 @@ export const api = {
     throw new Error('桌面原生环境不可用');
   },
 
-  async installSystemTool(toolId: string): Promise<boolean> {
+  async startInstallSystemTool(
+    toolId: string,
+    onLog: (log: string) => void,
+    onProgress: (percent: number) => void
+  ): Promise<boolean> {
     if (isTauri()) {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<boolean>('install_system_tool', { toolId });
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const { listen } = await import('@tauri-apps/api/event');
+
+        let unlistenLog: (() => void) | null = null;
+        let unlistenProgress: (() => void) | null = null;
+
+        unlistenLog = await listen<string>('install-log', (event) => {
+          onLog(event.payload);
+        });
+        unlistenProgress = await listen<number>('install-progress', (event) => {
+          onProgress(event.payload);
+        });
+
+        try {
+          return await invoke<boolean>('install_system_tool', { toolId });
+        } finally {
+          if (unlistenLog) unlistenLog();
+          if (unlistenProgress) unlistenProgress();
+        }
+      } catch (err) {
+        onLog(`[ERROR] 安装异常: ${err}`);
+        return false;
+      }
     }
-    throw new Error('桌面原生环境不可用');
+    onLog('[ERROR] 请在桌面客户端中运行以调用系统包管理器');
+    return false;
+  },
+
+  async installSystemTool(toolId: string): Promise<boolean> {
+    return this.startInstallSystemTool(toolId, () => {}, () => {});
   },
 
   // Mirrors
@@ -247,13 +278,43 @@ export const api = {
     throw new Error('桌面原生环境不可用');
   },
 
-  // Bootstrap / Install Mise CLI
-  async installMiseCli(): Promise<boolean> {
+  // Bootstrap / Install Mise CLI with real-time log streaming
+  async startBootstrapMise(
+    onLog: (log: string) => void,
+    onProgress: (percent: number) => void
+  ): Promise<boolean> {
     if (isTauri()) {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<boolean>('bootstrap_mise_cli');
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const { listen } = await import('@tauri-apps/api/event');
+
+        let unlistenLog: (() => void) | null = null;
+        let unlistenProgress: (() => void) | null = null;
+
+        unlistenLog = await listen<string>('install-log', (event) => {
+          onLog(event.payload);
+        });
+        unlistenProgress = await listen<number>('install-progress', (event) => {
+          onProgress(event.payload);
+        });
+
+        try {
+          return await invoke<boolean>('bootstrap_mise_cli');
+        } finally {
+          if (unlistenLog) unlistenLog();
+          if (unlistenProgress) unlistenProgress();
+        }
+      } catch (err) {
+        onLog(`[ERROR] 安装异常: ${err}`);
+        return false;
+      }
     }
-    throw new Error('桌面原生环境不可用');
+    onLog('[ERROR] 请在桌面客户端中运行');
+    return false;
+  },
+
+  async installMiseCli(): Promise<boolean> {
+    return this.startBootstrapMise(() => {}, () => {});
   },
 
   // Open URL in system default browser

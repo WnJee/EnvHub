@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::path::PathBuf;
 use std::process::Stdio;
 use tauri::{AppHandle, Emitter};
@@ -805,18 +806,32 @@ pub async fn install_runtime_version(
     tool_id: String,
     version: String,
 ) -> Result<bool, String> {
-    let mise_bin = env_helper::find_mise_binary()
-        .ok_or_else(|| "未找到 Mise CLI 引擎，请先前往设置进行一键安装".to_string())?;
+    env_helper::fix_system_path();
+
+    let mise_bin = match env_helper::find_mise_binary() {
+        Some(b) => b,
+        None => {
+            let err = "未找到 Mise CLI 引擎，请先点击右上角【一键部署 Mise 引擎】".to_string();
+            let _ = app.emit("install-log", format!("❌ {}", err));
+            let _ = app.emit("install-progress", 0);
+            return Err(err);
+        }
+    };
 
     let target = format!("{}@{}", tool_id, version);
-    let _ = app.emit("install-log", format!("> mise install {}", target));
+    let _ = app.emit("install-log", format!("> {} install {}", mise_bin.display(), target));
     let _ = app.emit("install-progress", 10);
 
-    let mut child = env_helper::create_silent_tokio_command(&mise_bin.to_string_lossy())
-        .args(["install", &target, "--verbose"])
+    let mut cmd = env_helper::create_silent_tokio_command(&mise_bin.to_string_lossy());
+    cmd.args(["install", &target, "--verbose"])
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped());
+
+    if let Ok(curr_path) = env::var("PATH") {
+        cmd.env("PATH", curr_path);
+    }
+
+    let mut child = cmd.spawn()
         .map_err(|e| format!("启动安装进程失败: {}", e))?;
 
     let stdout = child.stdout.take();
@@ -863,45 +878,191 @@ pub async fn install_runtime_version(
 
     let status = child.wait().await.map_err(|e| format!("等待安装完成失败: {}", e))?;
     if status.success() {
-        let _ = app.emit("install-log", format!("✓ {} 安装成功！", target));
+        let _ = app.emit("install-log", format!("✓ {} 安装成功！已完成环境注入与软链接配置", target));
         let _ = app.emit("install-progress", 100);
         Ok(true)
     } else {
-        let _ = app.emit("install-log", format!("✗ 安装失败，退出码: {:?}", status.code()));
+        let _ = app.emit("install-log", format!("❌ 安装失败，退出码: {:?}", status.code()));
+        if cfg!(target_os = "windows") {
+            let _ = app.emit("install-log", "💡 提示: Windows 环境下部分语言（如 Python/Node）需预先安装 7-Zip、Git 或 Visual C++ 运行库以支持解压。可在【系统工具箱】一键安装 Git 与 Scoop。".to_string());
+        }
         Ok(false)
     }
 }
 
 #[tauri::command]
-pub async fn bootstrap_mise_cli() -> Result<bool, String> {
+pub async fn bootstrap_mise_cli(app: AppHandle) -> Result<bool, String> {
+    let _ = app.emit("install-log", "> 正在初始化 Mise CLI 跨平台运行时引擎安装程序...".to_string());
+    let _ = app.emit("install-progress", 10);
+
     #[cfg(target_os = "windows")]
     {
-        let status = env_helper::create_silent_tokio_command("powershell")
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "irm https://mise.jdx.dev/install.ps1 | iex"])
-            .status()
-            .await
-            .map_err(|e| format!("执行 PowerShell 自举脚本失败: {}", e))?;
+        // Method 1: Direct standalone binary download from Cloudflare CDN into %LOCALAPPDATA%\mise\bin\mise.exe
+        let _ = app.emit("install-log", "方案 1: 正在从官方 CDN 极速拉取 Windows x64 独立可执行引擎...".to_string());
+        let _ = app.emit("install-progress", 25);
 
-        if status.success() {
-            env_helper::fix_system_path();
-            return Ok(true);
-        } else {
-            return Err(format!("PowerShell 自举脚本返回错误退出码: {:?}", status.code()));
+        let direct_download_ps = r#"
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13;
+            $binDir = "$env:LOCALAPPDATA\mise\bin";
+            if (-not (Test-Path $binDir)) {
+                New-Item -ItemType Directory -Force -Path $binDir | Out-Null;
+            }
+            $exePath = "$binDir\mise.exe";
+            try {
+                Invoke-WebRequest -Uri "https://mise.jdx.dev/mise-latest-windows-x64.exe" -OutFile $exePath -TimeoutSec 30;
+                if (Test-Path $exePath) {
+                    & $exePath --version
+                    exit 0
+                }
+            } catch {
+                exit 1
+            }
+            exit 1
+        "#;
+
+        let status1 = env_helper::create_silent_tokio_command("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", direct_download_ps])
+            .status()
+            .await;
+
+        if let Ok(s) = status1 {
+            if s.success() {
+                let _ = app.emit("install-log", "✓ 官方独立二进制引擎下载成功！正在同步环境变量与 Shims...".to_string());
+                let _ = app.emit("install-progress", 85);
+                env_helper::fix_system_path();
+                let _ = app.emit("install-log", "✓ Mise CLI 引擎已成功部署就绪！".to_string());
+                let _ = app.emit("install-progress", 100);
+                return Ok(true);
+            }
         }
+
+        // Method 2: Official install.ps1 script
+        let _ = app.emit("install-log", "方案 2: 尝试通过官方 PowerShell 安装脚本执行构建...".to_string());
+        let _ = app.emit("install-progress", 45);
+
+        let script_ps = r#"
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13;
+            Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force;
+            irm https://mise.jdx.dev/install.ps1 | iex
+        "#;
+
+        let status2 = env_helper::create_silent_tokio_command("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script_ps])
+            .status()
+            .await;
+
+        if let Ok(s) = status2 {
+            if s.success() {
+                let _ = app.emit("install-log", "✓ PowerShell 官方自举安装完成！".to_string());
+                env_helper::fix_system_path();
+                let _ = app.emit("install-progress", 100);
+                return Ok(true);
+            }
+        }
+
+        // Method 3: Scoop install mise
+        let has_scoop = env_helper::create_silent_command("scoop").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
+        if has_scoop {
+            let _ = app.emit("install-log", "方案 3: 尝试通过 Scoop 包管理器安装 mise...".to_string());
+            let status3 = env_helper::create_silent_tokio_command("powershell")
+                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "scoop install mise"])
+                .status()
+                .await;
+
+            if let Ok(s) = status3 {
+                if s.success() {
+                    let _ = app.emit("install-log", "✓ 通过 Scoop 成功安装 mise！".to_string());
+                    env_helper::fix_system_path();
+                    let _ = app.emit("install-progress", 100);
+                    return Ok(true);
+                }
+            }
+        }
+
+        // Method 4: WinGet install
+        let has_winget = env_helper::create_silent_command("winget").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
+        if has_winget {
+            let _ = app.emit("install-log", "方案 4: 尝试通过 WinGet 安装 jdx.mise...".to_string());
+            let status4 = env_helper::create_silent_tokio_command("powershell")
+                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "winget install jdx.mise --accept-source-agreements --accept-package-agreements"])
+                .status()
+                .await;
+
+            if let Ok(s) = status4 {
+                if s.success() {
+                    let _ = app.emit("install-log", "✓ 通过 WinGet 成功安装 mise！".to_string());
+                    env_helper::fix_system_path();
+                    let _ = app.emit("install-progress", 100);
+                    return Ok(true);
+                }
+            }
+        }
+
+        let _ = app.emit("install-log", "❌ 所有自动安装途径均失败，请检查网络连接或是否开启了代理拦截。".to_string());
+        return Err("Windows 下自动安装 Mise 失败，请检查网络连接或手动在终端执行: irm https://mise.jdx.dev/install.ps1 | iex".to_string());
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        let status = env_helper::create_silent_tokio_command("sh")
+        let _ = app.emit("install-log", "> 执行官方自举脚本: curl https://mise.run | sh".to_string());
+        let mut child = env_helper::create_silent_tokio_command("sh")
             .args(["-c", "curl https://mise.run | sh"])
-            .status()
-            .await
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|e| format!("执行自举脚本失败: {}", e))?;
 
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        let app_c1 = app.clone();
+        if let Some(stdout) = stdout {
+            let reader = BufReader::new(stdout);
+            let mut lines = reader.lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let _ = app_c1.emit("install-log", line);
+                }
+            });
+        }
+
+        let app_c2 = app.clone();
+        if let Some(stderr) = stderr {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let _ = app_c2.emit("install-log", line);
+                }
+            });
+        }
+
+        let status = child.wait().await.map_err(|e| format!("等待自举脚本完成失败: {}", e))?;
         if status.success() {
             env_helper::fix_system_path();
+            let _ = app.emit("install-log", "✓ Mise CLI 引擎已安装就绪！".to_string());
+            let _ = app.emit("install-progress", 100);
             return Ok(true);
         } else {
+            // Try brew install mise as fallback on macOS
+            #[cfg(target_os = "macos")]
+            {
+                let _ = app.emit("install-log", "尝试通过 Homebrew 安装 mise...".to_string());
+                let brew_status = env_helper::create_silent_tokio_command("brew")
+                    .args(["install", "mise"])
+                    .status()
+                    .await;
+                if let Ok(bs) = brew_status {
+                    if bs.success() {
+                        env_helper::fix_system_path();
+                        let _ = app.emit("install-log", "✓ 通过 Homebrew 成功安装 mise！".to_string());
+                        let _ = app.emit("install-progress", 100);
+                        return Ok(true);
+                    }
+                }
+            }
+
+            let _ = app.emit("install-log", format!("❌ 自举脚本返回错误退出码: {:?}", status.code()));
             return Err(format!("自举脚本返回错误退出码: {:?}", status.code()));
         }
     }

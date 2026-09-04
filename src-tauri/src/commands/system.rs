@@ -2,6 +2,9 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::process::Stdio;
+use tauri::{AppHandle, Emitter};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use crate::env_helper;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -564,7 +567,111 @@ pub async fn test_system_tool(tool_id: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn install_system_tool(tool_id: String) -> Result<bool, String> {
+pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool, String> {
+    let _ = app.emit("install-log", format!("> 开始安装系统工具: {}", tool_id));
+    let _ = app.emit("install-progress", 10);
+
+    #[cfg(target_os = "windows")]
+    {
+        if tool_id == "scoop" {
+            let script = r#"
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13;
+                Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force;
+                irm get.scoop.sh | iex
+            "#;
+            let _ = app.emit("install-log", "正在执行 Scoop 安装脚本...".to_string());
+            let status = env_helper::create_silent_tokio_command("powershell")
+                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+                .status()
+                .await
+                .map_err(|e| format!("安装 Scoop 失败: {}", e))?;
+
+            if !status.success() {
+                return Err(format!("安装 Scoop 返回退出码: {:?}", status.code()));
+            }
+            env_helper::fix_system_path();
+            let _ = app.emit("install-progress", 100);
+            return Ok(true);
+        }
+
+        let has_scoop = env_helper::create_silent_command("scoop").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
+        let has_winget = env_helper::create_silent_command("winget").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
+
+        let (scoop_pkg, winget_pkg): (&str, &str) = match tool_id.as_str() {
+            "git" => ("git", "Git.Git"),
+            "docker" => ("docker", "Docker.DockerDesktop"),
+            "docker-compose" => ("docker-compose", "Docker.DockerCompose"),
+            "nginx" => ("nginx", "Nginx.Nginx"),
+            "redis" => ("redis", "Redis.Redis"),
+            "mysql" => ("mysql", "Oracle.MySQL"),
+            "postgresql" => ("postgresql", "PostgreSQL.PostgreSQL"),
+            "mongodb" => ("mongodb", "MongoDB.Server"),
+            "ollama" => ("ollama", "Ollama.Ollama"),
+            "gh" => ("gh", "GitHub.cli"),
+            "ripgrep" => ("ripgrep", "BurntSushi.ripgrep.MSVC"),
+            "fd" => ("fd", "sharkdp.fd"),
+            "lazygit" => ("lazygit", "JesseDuffield.lazygit"),
+            "bat" => ("bat", "sharkdp.bat"),
+            "fzf" => ("fzf", "junegunn.fzf"),
+            "zoxide" => ("zoxide", "ajeetdsouza.zoxide"),
+            "ffmpeg" => ("ffmpeg", "Gyan.FFmpeg"),
+            "cmake" => ("cmake", "Kitware.CMake"),
+            "neovim" => ("neovim", "Neovim.Neovim"),
+            _ => (tool_id.as_str(), tool_id.as_str()),
+        };
+
+        let cmd_string = if has_scoop {
+            let _ = app.emit("install-log", format!("使用 Scoop 极速安装 {}", scoop_pkg));
+            format!("scoop install {}", scoop_pkg)
+        } else if has_winget {
+            let _ = app.emit("install-log", format!("使用 WinGet 安装 {}", winget_pkg));
+            format!("winget install --accept-source-agreements --accept-package-agreements {}", winget_pkg)
+        } else {
+            return Err("未在 Windows 系统中检测到 Scoop 或 WinGet，请先在工具箱首位安装 Scoop".to_string());
+        };
+
+        let mut child = env_helper::create_silent_tokio_command("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &cmd_string])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("启动安装进程失败: {}", e))?;
+
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        let app_c1 = app.clone();
+        if let Some(stdout) = stdout {
+            let reader = BufReader::new(stdout);
+            let mut lines = reader.lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let _ = app_c1.emit("install-log", line);
+                }
+            });
+        }
+
+        let app_c2 = app.clone();
+        if let Some(stderr) = stderr {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let _ = app_c2.emit("install-log", line);
+                }
+            });
+        }
+
+        let status = child.wait().await.map_err(|e| format!("等待安装完成失败: {}", e))?;
+        if !status.success() {
+            let _ = app.emit("install-log", format!("❌ 安装失败，退出码: {:?}", status.code()));
+            return Err(format!("安装执行失败，退出码: {:?}", status.code()));
+        }
+        let _ = app.emit("install-log", format!("✓ {} 安装成功！", tool_id));
+        let _ = app.emit("install-progress", 100);
+        return Ok(true);
+    }
+
     #[cfg(target_os = "macos")]
     {
         let cmd = if tool_id == "brew" || tool_id == "homebrew" {
@@ -574,34 +681,47 @@ pub async fn install_system_tool(tool_id: String) -> Result<bool, String> {
         } else {
             format!("brew install {}", tool_id)
         };
-        let status = env_helper::create_silent_tokio_command("sh")
+        let _ = app.emit("install-log", format!("> 执行: {}", cmd));
+
+        let mut child = env_helper::create_silent_tokio_command("sh")
             .args(["-c", &cmd])
-            .status()
-            .await
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
             .map_err(|e| format!("调用 Homebrew 失败: {}", e))?;
 
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        let app_c1 = app.clone();
+        if let Some(stdout) = stdout {
+            let reader = BufReader::new(stdout);
+            let mut lines = reader.lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let _ = app_c1.emit("install-log", line);
+                }
+            });
+        }
+
+        let app_c2 = app.clone();
+        if let Some(stderr) = stderr {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let _ = app_c2.emit("install-log", line);
+                }
+            });
+        }
+
+        let status = child.wait().await.map_err(|e| format!("等待 Homebrew 完成失败: {}", e))?;
         if !status.success() {
+            let _ = app.emit("install-log", format!("❌ Homebrew 安装失败，退出码: {:?}", status.code()));
             return Err(format!("Homebrew 执行失败，退出码: {:?}", status.code()));
         }
-        return Ok(true);
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let cmd = if tool_id == "scoop" {
-            "irm get.scoop.sh | iex".to_string()
-        } else {
-            format!("winget install --accept-source-agreements --accept-package-agreements {}", tool_id)
-        };
-        let status = env_helper::create_silent_tokio_command("powershell")
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &cmd])
-            .status()
-            .await
-            .map_err(|e| format!("调用安装工具失败: {}", e))?;
-
-        if !status.success() {
-            return Err(format!("安装执行失败，退出码: {:?}", status.code()));
-        }
+        let _ = app.emit("install-log", format!("✓ {} 安装成功！", tool_id));
+        let _ = app.emit("install-progress", 100);
         return Ok(true);
     }
 
@@ -612,15 +732,47 @@ pub async fn install_system_tool(tool_id: String) -> Result<bool, String> {
         } else {
             format!("sudo apt install -y {}", tool_id)
         };
-        let status = env_helper::create_silent_tokio_command("sh")
-            .args(["-c", &cmd])
-            .status()
-            .await
-            .map_err(|e| format!("调用 apt 失败: {}", e))?;
+        let _ = app.emit("install-log", format!("> 执行: {}", cmd));
 
-        if !status.success() {
-            return Err(format!("apt 执行失败，退出码: {:?}", status.code()));
+        let mut child = env_helper::create_silent_tokio_command("sh")
+            .args(["-c", &cmd])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("调用安装工具失败: {}", e))?;
+
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        let app_c1 = app.clone();
+        if let Some(stdout) = stdout {
+            let reader = BufReader::new(stdout);
+            let mut lines = reader.lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let _ = app_c1.emit("install-log", line);
+                }
+            });
         }
+
+        let app_c2 = app.clone();
+        if let Some(stderr) = stderr {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let _ = app_c2.emit("install-log", line);
+                }
+            });
+        }
+
+        let status = child.wait().await.map_err(|e| format!("等待完成失败: {}", e))?;
+        if !status.success() {
+            let _ = app.emit("install-log", format!("❌ 安装失败，退出码: {:?}", status.code()));
+            return Err(format!("安装执行失败，退出码: {:?}", status.code()));
+        }
+        let _ = app.emit("install-log", format!("✓ {} 安装成功！", tool_id));
+        let _ = app.emit("install-progress", 100);
         return Ok(true);
     }
 }
@@ -631,27 +783,62 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
     env_helper::fix_system_path();
 
     let mut checks = Vec::new();
-    let shell = env::var("SHELL").unwrap_or_else(|_| {
-        if cfg!(windows) { "PowerShell".to_string() } else { "/bin/zsh".to_string() }
-    });
-    let mut rc_file = if cfg!(windows) { "PowerShell Profile ($PROFILE)".to_string() } else { "~/.zshrc".to_string() };
+    let is_windows = cfg!(target_os = "windows");
+
+    let shell = if is_windows {
+        "PowerShell".to_string()
+    } else {
+        env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
+    };
+
+    let mut rc_file = if is_windows {
+        "Microsoft.PowerShell_profile.ps1".to_string()
+    } else if shell.ends_with("bash") {
+        "~/.bashrc".to_string()
+    } else {
+        "~/.zshrc".to_string()
+    };
+
     let mut has_activation = false;
 
-    if let Some(home) = dirs::home_dir() {
-        let zshrc = home.join(".zshrc");
-        let zprofile = home.join(".zprofile");
-        let bashrc = home.join(".bashrc");
-        let ps_profile1 = home.join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1");
-        let ps_profile2 = home.join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1");
+    if is_windows {
+        // Windows profile locations (PowerShell 5, PowerShell 7, OneDrive variants)
+        if let Some(home) = dirs::home_dir() {
+            let win_profiles = [
+                home.join("Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
+                home.join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+                home.join("OneDrive/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
+                home.join("OneDrive/Documents/PowerShell/Microsoft.PowerShell_profile.ps1"),
+            ];
 
-        let check_files = [&zshrc, &zprofile, &bashrc, &ps_profile1, &ps_profile2];
-        for f in check_files {
-            if f.exists() {
-                if let Ok(content) = fs::read_to_string(f) {
-                    if content.contains("mise activate") || content.contains("rtx activate") {
-                        has_activation = true;
-                        rc_file = f.file_name().and_then(|n| n.to_str()).unwrap_or("profile").to_string();
-                        break;
+            for p in win_profiles {
+                if p.exists() {
+                    if let Ok(content) = fs::read_to_string(&p) {
+                        if content.contains("mise activate") || content.contains("rtx activate") {
+                            has_activation = true;
+                            rc_file = p.file_name().and_then(|n| n.to_str()).unwrap_or("Microsoft.PowerShell_profile.ps1").to_string();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // macOS / Linux
+        if let Some(home) = dirs::home_dir() {
+            let zshrc = home.join(".zshrc");
+            let zprofile = home.join(".zprofile");
+            let bashrc = home.join(".bashrc");
+            let bash_profile = home.join(".bash_profile");
+
+            for f in [&zshrc, &zprofile, &bashrc, &bash_profile] {
+                if f.exists() {
+                    if let Ok(content) = fs::read_to_string(f) {
+                        if content.contains("mise activate") || content.contains("rtx activate") {
+                            has_activation = true;
+                            rc_file = f.file_name().and_then(|n| n.to_str()).unwrap_or("profile").to_string();
+                            break;
+                        }
                     }
                 }
             }
@@ -664,8 +851,10 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
         status: if has_activation { "ok".to_string() } else { "warning".to_string() },
         message: if has_activation {
             format!("已在 {} 中检测到 mise activate，命令行环境同步正常", rc_file)
+        } else if is_windows {
+            "未在 PowerShell Profile 中检测到 mise activate，命令行可能无法自动同步运行时版本".to_string()
         } else {
-            format!("未在终端 Profile 中配置 mise activate，命令行可能无法自动切换版本", )
+            format!("未在 {} 中配置 mise activate，命令行可能无法自动切换版本", rc_file)
         },
         shell: shell.clone(),
         config_file: rc_file.clone(),
@@ -674,25 +863,13 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
 
     // 2. PATH priority check
     let path = env::var("PATH").unwrap_or_default();
-    let has_shims_in_path = path.contains(".local/share/mise/shims") || path.contains("mise/shims") || path.contains("mise\\shims");
+    let has_shims_in_path = path.contains(".local/share/mise/shims")
+        || path.contains("mise/shims")
+        || path.contains("mise\\shims")
+        || path.contains("AppData\\Local\\mise\\shims")
+        || path.contains("scoop\\shims");
 
-    let mut has_shims_configured = has_shims_in_path || has_activation;
-    if let Some(home) = dirs::home_dir() {
-        let zshrc = home.join(".zshrc");
-        let zprofile = home.join(".zprofile");
-        let bashrc = home.join(".bashrc");
-        let ps_profile = home.join("Documents/PowerShell/Microsoft.PowerShell_profile.ps1");
-        for rc in [&zshrc, &zprofile, &bashrc, &ps_profile] {
-            if rc.exists() {
-                if let Ok(content) = fs::read_to_string(rc) {
-                    if content.contains("mise/shims") || content.contains("mise\\shims") || content.contains("mise activate") {
-                        has_shims_configured = true;
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    let has_shims_configured = has_shims_in_path || has_activation;
 
     checks.push(EnvHealthCheck {
         id: "path-priority".to_string(),
@@ -704,48 +881,130 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
             "未在系统 PATH 中检测到 mise shims，点击一键自动修复注入环境变量".to_string()
         },
         shell: shell.clone(),
-        config_file: "PATH Environment".to_string(),
+        config_file: if is_windows { "System PATH Registry".to_string() } else { "PATH Environment".to_string() },
         can_auto_fix: !has_shims_configured,
     });
 
-    // 3. Package Manager
-    let pkg_mgr_ok = if cfg!(target_os = "windows") {
-        env_helper::create_silent_command("winget").arg("--version").output().is_ok()
+    // 3. Package Manager check
+    let (pkg_mgr_ok, pkg_mgr_name, pkg_mgr_msg) = if is_windows {
+        let has_scoop = env_helper::create_silent_command("scoop").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
+        let has_winget = env_helper::create_silent_command("winget").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
+        if has_scoop {
+            (true, "Scoop".to_string(), "Scoop 包管理器处于就绪状态，支持自动安装底层 CLI 依赖".to_string())
+        } else if has_winget {
+            (true, "WinGet".to_string(), "WinGet 包管理器处于就绪状态，支持安装底层 CLI 依赖".to_string())
+        } else {
+            (false, "Scoop / WinGet".to_string(), "未检测到 Scoop 或 WinGet 包管理器，点击一键自动安装 Scoop".to_string())
+        }
     } else {
-        env_helper::create_silent_command("brew").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+        let has_brew = env_helper::create_silent_command("brew").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+            || std::path::Path::new("/opt/homebrew/bin/brew").exists()
+            || std::path::Path::new("/usr/local/bin/brew").exists();
+        if has_brew {
+            (true, "Homebrew".to_string(), "Homebrew 处于就绪状态，支持自动安装底层 CLI 依赖".to_string())
+        } else {
+            (false, "Homebrew".to_string(), "未检测到 Homebrew，点击一键自动安装 Homebrew".to_string())
+        }
     };
 
     checks.push(EnvHealthCheck {
         id: "package-manager".to_string(),
         title: "系统包管理器状态".to_string(),
         status: if pkg_mgr_ok { "ok".to_string() } else { "warning".to_string() },
-        message: if cfg!(target_os = "windows") {
-            if pkg_mgr_ok { "Windows Winget 包管理器处于就绪状态".to_string() } else { "未检测到 Winget 包管理器".to_string() }
-        } else {
-            if pkg_mgr_ok { "Homebrew 处于就绪状态，支持自动安装底层 CLI 依赖".to_string() } else { "未检测到 Homebrew，部分系统工具需要手动编译安装".to_string() }
-        },
-        shell: "system".to_string(),
-        config_file: "system".to_string(),
-        can_auto_fix: false,
+        message: pkg_mgr_msg,
+        shell: if is_windows { "PowerShell".to_string() } else { "bash".to_string() },
+        config_file: pkg_mgr_name,
+        can_auto_fix: !pkg_mgr_ok,
     });
 
     Ok(checks)
 }
 
 #[tauri::command]
-pub async fn auto_fix_health_check(_check_id: String) -> Result<bool, String> {
+pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
+    if check_id == "package-manager" {
+        #[cfg(target_os = "windows")]
+        {
+            // Install Scoop on Windows with TLS 1.2
+            let script = r#"
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13;
+                Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force;
+                irm get.scoop.sh | iex
+            "#;
+            let status = env_helper::create_silent_tokio_command("powershell")
+                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+                .status()
+                .await
+                .map_err(|e| format!("安装 Scoop 失败: {}", e))?;
+
+            if !status.success() {
+                return Err(format!("安装 Scoop 返回退出码: {:?}", status.code()));
+            }
+            env_helper::fix_system_path();
+            return Ok(true);
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            // Install Homebrew on macOS / Linux
+            let script = "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"";
+            let status = env_helper::create_silent_tokio_command("sh")
+                .args(["-c", script])
+                .status()
+                .await
+                .map_err(|e| format!("安装 Homebrew 失败: {}", e))?;
+
+            if !status.success() {
+                return Err(format!("Homebrew 安装返回退出码: {:?}", status.code()));
+            }
+            env_helper::fix_system_path();
+            return Ok(true);
+        }
+    }
+
     if let Some(home) = dirs::home_dir() {
         #[cfg(target_os = "windows")]
         {
-            let ps_dir = home.join("Documents/PowerShell");
-            let _ = fs::create_dir_all(&ps_dir);
-            let ps_profile = ps_dir.join("Microsoft.PowerShell_profile.ps1");
+            // 1. Write to PowerShell profile
+            let hook = "\n# Mise Version Manager Hook\nif (Get-Command mise -ErrorAction SilentlyContinue) {\n    (& mise activate ps1) | Out-String | Invoke-Expression\n}\n";
+            
+            let profile_dirs = [
+                home.join("Documents/WindowsPowerShell"),
+                home.join("Documents/PowerShell"),
+            ];
 
-            let existing_profile = fs::read_to_string(&ps_profile).unwrap_or_default();
-            if !existing_profile.contains("mise activate") {
-                let hook = "\n# Mise Version Manager Hook\n(& mise activate ps1) | Out-String | Invoke-Expression\n";
-                let _ = fs::write(&ps_profile, existing_profile + hook);
+            for p_dir in profile_dirs {
+                let _ = fs::create_dir_all(&p_dir);
+                let p_file = p_dir.join("Microsoft.PowerShell_profile.ps1");
+                let existing = fs::read_to_string(&p_file).unwrap_or_default();
+                if !existing.contains("mise activate") {
+                    let _ = fs::write(&p_file, format!("{}{}", existing, hook));
+                }
             }
+
+            // 2. Inject shims and mise bin into Windows User Registry PATH
+            let add_path_script = r#"
+                $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+                $shimsPath = "$env:LOCALAPPDATA\mise\shims"
+                $binPath = "$env:LOCALAPPDATA\mise\bin"
+                $changed = $false
+                if ($userPath -notlike "*$shimsPath*") {
+                    $userPath = "$shimsPath;$userPath"
+                    $changed = $true
+                }
+                if ($userPath -notlike "*$binPath*") {
+                    $userPath = "$binPath;$userPath"
+                    $changed = $true
+                }
+                if ($changed) {
+                    [Environment]::SetEnvironmentVariable("Path", $userPath, "User")
+                }
+            "#;
+            let _ = env_helper::create_silent_tokio_command("powershell")
+                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", add_path_script])
+                .status()
+                .await;
+
             env_helper::fix_system_path();
             return Ok(true);
         }
