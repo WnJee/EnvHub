@@ -41,6 +41,45 @@ EnvHub 实现了**极低资源占用（常驻内存 ~30-50MB，安装包 ~10MB�
 
 ---
 
+## 📸 界面预览 (Screenshots)
+
+### 1. 多语言运行时版本管理 (Runtimes)
+> 支持 Node.js、Python、Go、Rust、Java、Bun、Deno、Ruby、PHP 等海量语言的全局与局部多版本下载、快速切换与统一管理，并支持一键导出跨平台环境安装脚本。
+
+<div align="center">
+  <img src="docs/images/runtimes.png" alt="多语言运行时管理" width="90%" />
+</div>
+
+### 2. 系统级开发工具箱 (System Tools)
+> 跨平台自动适配宿主包管理器（macOS/Linux 使用 Homebrew，Windows 使用 Scoop / Winget），统一管理与测试 Git、Docker CLI、Docker Compose、Nginx、Redis、Neovim 等中间件与底层环境。
+
+<div align="center">
+  <img src="docs/images/system-tools.png" alt="系统级开发工具箱" width="90%" />
+</div>
+
+### 3. 国内源加速与测速 (Mirrors)
+> 内置 NPM、Pip、Go Modules、Cargo、Docker Hub 镜像加速及 Homebrew 国内高速镜像源，支持一键实时并发测速与系统配置文件一键写入。
+
+<div align="center">
+  <img src="docs/images/mirrors.png" alt="国内源加速与测速" width="90%" />
+</div>
+
+### 4. 环境健康自检与 Shell 修复 (Health Check)
+> 实时诊断 Shell 环境变量、Shell RC (`~/.zshrc` / `~/.bashrc`) 激活状态、Shims 注入优先级及包管理器就绪状态，一键自动修复终端与 GUI 环境变量脱节难题。
+
+<div align="center">
+  <img src="docs/images/health-check.png" alt="环境健康自检与 Shell 修复" width="90%" />
+</div>
+
+### 5. 项目工程环境隔离 (Project Isolation)
+> 针对独立项目工程目录绑定特定语言版本（自动解析并写入 `.mise.toml` 或 `.tool-versions`），进入工程即时生效，保障不同项目间依赖环境严密隔离。
+
+<div align="center">
+  <img src="docs/images/project-isolation.png" alt="项目工程环境隔离" width="90%" />
+</div>
+
+---
+
 ## 🍎 macOS 安装提示「已损坏，无法打开」解决方式
 
 由于开源客户端未购买 Apple 商业开发者证书，首次从浏览器下载安装后 macOS Gatekeeper 会提示已损坏拦截。

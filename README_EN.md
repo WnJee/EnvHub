@@ -39,6 +39,45 @@ Unlike resource-heavy Electron apps, EnvHub achieves **minimal resource footprin
 
 ---
 
+## 📸 Screenshots
+
+### 1. Multi-Language Runtime Version Manager
+> Manage, download, and switch multiple versions of Node.js, Python, Go, Rust, Java, Bun, Deno, Ruby, PHP, and more. Support 1-click cross-platform environment export script.
+
+<div align="center">
+  <img src="docs/images/runtimes.png" alt="Multi-Language Runtime Version Manager" width="90%" />
+</div>
+
+### 2. System CLI & Developer Toolbox
+> Unified integration with host package managers (macOS/Linux Homebrew, Windows Scoop / Winget) to install, run, and test Git, Docker CLI, Docker Compose, Nginx, Redis, Neovim, etc.
+
+<div align="center">
+  <img src="docs/images/system-tools.png" alt="System Developer Toolbox" width="90%" />
+</div>
+
+### 3. Mirror Acceleration & Speed Benchmarks
+> Built-in mirrors for NPM, Pip, Go Modules, Cargo, Docker Hub, and Homebrew with real-time ping latency testing and 1-click config persistence.
+
+<div align="center">
+  <img src="docs/images/mirrors.png" alt="Mirror Acceleration & Speed Benchmarks" width="90%" />
+</div>
+
+### 4. Environment Health Diagnostics & Shell Auto-Repair
+> Diagnose terminal PATH inheritance, Shell RC (`~/.zshrc` / `~/.bashrc`) activation, and Shims priority, with 1-click automatic repair.
+
+<div align="center">
+  <img src="docs/images/health-check.png" alt="Environment Health Diagnostics & Shell Auto-Repair" width="90%" />
+</div>
+
+### 5. Project-Level Environment Isolation
+> Automatically scan and bind runtime versions to specific project workspaces (`.mise.toml`, `.tool-versions`), isolating project environments without polluting global setups.
+
+<div align="center">
+  <img src="docs/images/project-isolation.png" alt="Project Environment Isolation" width="90%" />
+</div>
+
+---
+
 ## 🏗️ Architecture
 
 ```
