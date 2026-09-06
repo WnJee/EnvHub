@@ -107,6 +107,14 @@ export const api = {
     return false;
   },
 
+  async cancelCurrentInstall(): Promise<boolean> {
+    if (isTauri()) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      return await invoke<boolean>('cancel_current_install');
+    }
+    return false;
+  },
+
   // Projects
   async getProjects(): Promise<ProjectEnv[]> {
     if (isTauri()) {

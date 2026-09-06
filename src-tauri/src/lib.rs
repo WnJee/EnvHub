@@ -24,6 +24,7 @@ pub fn run() {
             set_global_version,
             uninstall_runtime_version,
             install_runtime_version,
+            cancel_current_install,
             bootstrap_mise_cli,
             open_terminal_for_runtime,
 

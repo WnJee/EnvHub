@@ -19,6 +19,7 @@ interface InstallModalProps {
   progress: number;
   status: 'idle' | 'running' | 'completed' | 'failed';
   onClose: () => void;
+  onCancel: () => Promise<void>;
   onSetGlobal: () => void;
 }
 
@@ -30,6 +31,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
   progress,
   status,
   onClose,
+  onCancel,
   onSetGlobal,
 }) => {
   const terminalEndRef = useRef<HTMLDivElement>(null);
@@ -46,6 +48,14 @@ export const InstallModal: React.FC<InstallModalProps> = ({
   const copyLogs = () => {
     navigator.clipboard.writeText(logs.join('\n'));
     toast.success('已复制安装日志到剪贴板');
+  };
+
+  const handleClose = async () => {
+    if (status === 'running') {
+      if (!window.confirm('安装仍在进行，确定要强制终止并关闭吗？')) return;
+      await onCancel();
+    }
+    onClose();
   };
 
   const getStageText = () => {
@@ -92,9 +102,8 @@ export const InstallModal: React.FC<InstallModalProps> = ({
           </div>
 
           <button
-            onClick={onClose}
-            disabled={status === 'running'}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-30 transition-colors"
+            onClick={handleClose}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -200,11 +209,10 @@ export const InstallModal: React.FC<InstallModalProps> = ({
               </button>
             )}
             <button
-              onClick={onClose}
-              disabled={status === 'running'}
-              className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-colors disabled:opacity-40"
+              onClick={handleClose}
+              className={`px-4 py-1.5 rounded-xl text-xs font-medium transition-colors ${status === 'running' ? 'bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30' : 'bg-slate-800 hover:bg-slate-700 text-slate-200'}`}
             >
-              {status === 'completed' ? '完成' : '关闭'}
+              {status === 'running' ? '终止并关闭' : status === 'completed' ? '完成' : '关闭'}
             </button>
           </div>
         </div>

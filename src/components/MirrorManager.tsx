@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { MirrorConfig } from '../types';
 import { 
   Zap, 
@@ -25,7 +25,17 @@ export const MirrorManager: React.FC<MirrorManagerProps> = ({
   isPinging,
 }) => {
   const [activeTab, setActiveTab] = useState<string>(mirrors[0]?.tool || 'npm');
+  const initializedPlatformTab = useRef(false);
   const toast = useToast();
+
+  useEffect(() => {
+    if (mirrors.length > 0 && !initializedPlatformTab.current) {
+      initializedPlatformTab.current = true;
+      setActiveTab(mirrors[0].tool);
+    } else if (mirrors.length > 0 && !mirrors.some((mirror) => mirror.tool === activeTab)) {
+      setActiveTab(mirrors[0].tool);
+    }
+  }, [mirrors, activeTab]);
 
   const currentMirrorConfig = mirrors.find((m) => m.tool === activeTab) || mirrors[0];
 

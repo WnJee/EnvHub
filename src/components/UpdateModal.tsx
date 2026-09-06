@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { 
   Sparkles, 
   Download, 
@@ -193,6 +193,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   const [progress, setProgress] = useState<number>(0);
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [isRelaunching, setIsRelaunching] = useState<boolean>(false);
+  const cancelledRef = useRef(false);
 
   if (!isOpen || !updateInfo || !updateInfo.hasUpdate) return null;
 
@@ -215,6 +216,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     if (!url) return;
 
     setDownloadStatus('downloading');
+    cancelledRef.current = false;
     setProgress(5);
     setErrorMsg('');
 
@@ -227,6 +229,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
       setDownloadStatus('completed');
       setProgress(100);
     } catch (err: any) {
+      if (cancelledRef.current) return;
       console.error('Download update error:', err);
       setErrorMsg(typeof err === 'string' ? err : err.message || '下载安装包失败');
       setDownloadStatus('error');
@@ -243,12 +246,15 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     }
   };
 
-  const handleCloseModal = () => {
-    if (downloadStatus !== 'downloading') {
-      setDownloadStatus('idle');
-      setProgress(0);
-      onClose();
+  const handleCloseModal = async () => {
+    if (downloadStatus === 'downloading') {
+      if (!window.confirm('更新仍在下载，确定要强制终止并关闭吗？')) return;
+      cancelledRef.current = true;
+      await api.cancelCurrentInstall();
     }
+    setDownloadStatus('idle');
+    setProgress(0);
+    onClose();
   };
 
   // Detect platform chip
@@ -317,8 +323,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 
           <button
             onClick={handleCloseModal}
-            disabled={downloadStatus === 'downloading'}
-            className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/80 transition-colors disabled:opacity-30 relative z-10"
+            className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800/80 transition-colors relative z-10"
           >
             <X className="w-5 h-5" />
           </button>
@@ -459,10 +464,9 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
               <>
                 <button
                   onClick={handleCloseModal}
-                  disabled={downloadStatus === 'downloading'}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors disabled:opacity-50"
+                  className={`px-4 py-2 rounded-xl text-xs font-medium transition-colors ${downloadStatus === 'downloading' ? 'bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}`}
                 >
-                  稍后提醒
+                  {downloadStatus === 'downloading' ? '终止并关闭' : '稍后提醒'}
                 </button>
                 <button
                   onClick={handleStartInAppDownload}

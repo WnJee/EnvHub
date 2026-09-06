@@ -269,8 +269,16 @@ pub async fn open_in_editor(path: String) -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
+        // Invoke Code directly so paths containing spaces are passed as one
+        // argument. Fall back to `start` for installations that only expose a
+        // shell shim.
+        if let Ok(status) = crate::env_helper::create_silent_command("code").arg(&path).status() {
+            if status.success() {
+                return Ok(true);
+            }
+        }
         let status = crate::env_helper::create_silent_command("cmd")
-            .args(["/c", "start", "code", &path])
+            .args(["/c", "start", "", "code", &path])
             .status()
             .map_err(|e| format!("打开 VS Code 失败: {}", e))?;
         return Ok(status.success());
@@ -299,14 +307,19 @@ pub async fn open_in_terminal(path: String) -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
-        let wt_res = crate::env_helper::create_silent_command("cmd")
-            .args(["/c", "start", "wt", "-d", &path])
-            .status();
-        if wt_res.is_err() || !wt_res.unwrap().success() {
-            let _ = crate::env_helper::create_silent_command("cmd")
-                .args(["/c", "start", "powershell", "-NoExit", "-Command", &format!("Set-Location -Path '{}'", path)])
-                .status();
+        // Prefer Windows Terminal directly; this preserves spaces and Unicode
+        // in project paths. Fall back to PowerShell when `wt.exe` is absent.
+        if let Ok(status) = crate::env_helper::create_silent_command("wt").args(["-d", &path]).status() {
+            if status.success() {
+                return Ok(true);
+            }
         }
+        let escaped = path.replace('\'', "''");
+        let launched = crate::env_helper::create_silent_command("powershell")
+            .args(["-NoExit", "-Command", &format!("Set-Location -LiteralPath '{}';", escaped)])
+            .spawn()
+            .map_err(|e| format!("打开终端失败: {}", e))?;
+        drop(launched);
         return Ok(true);
     }
 

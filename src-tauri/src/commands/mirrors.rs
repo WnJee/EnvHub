@@ -4,6 +4,7 @@ use std::fs;
 use std::time::Instant;
 use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
+use crate::env_helper;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MirrorOption {
@@ -26,7 +27,46 @@ pub struct MirrorConfig {
 
 #[tauri::command]
 pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
+    // Refresh PATH so GUI launches can see Node/Go installed after login.
+    env_helper::fix_system_path();
     let mut configs = Vec::new();
+
+    // Platform package-manager mirrors lead the list because they affect
+    // most subsequent installation operations.
+    #[cfg(not(target_os = "windows"))]
+    configs.push(MirrorConfig {
+        id: "brew".to_string(),
+        name: "Homebrew (macOS / Linux)".to_string(),
+        tool: "brew".to_string(),
+        current_mirror: "https://mirrors.ustc.edu.cn/homebrew-bottles".to_string(),
+        options: vec![
+            MirrorOption { name: "中国科学技术大学 USTC 镜像".to_string(), url: "https://mirrors.ustc.edu.cn/homebrew-bottles".to_string(), ping: None, is_default: Some(true) },
+            MirrorOption { name: "清华大学 TUNA 镜像".to_string(), url: "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles".to_string(), ping: None, is_default: None },
+            MirrorOption { name: "阿里云 Homebrew 镜像".to_string(), url: "https://mirrors.aliyun.com/homebrew/homebrew-bottles".to_string(), ping: None, is_default: None },
+        ],
+    });
+
+    #[cfg(target_os = "windows")]
+    {
+        let scoop_current = env_helper::create_silent_command("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "scoop config SCOOP_REPO"])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "https://github.com/ScoopInstaller/Scoop".to_string());
+        configs.push(MirrorConfig {
+            id: "scoop".to_string(),
+            name: "Scoop (Windows)".to_string(),
+            tool: "scoop".to_string(),
+            current_mirror: scoop_current,
+            options: vec![
+                MirrorOption { name: "Scoop 官方 GitHub 仓库".to_string(), url: "https://github.com/ScoopInstaller/Scoop".to_string(), ping: None, is_default: Some(true) },
+                MirrorOption { name: "Gitee Scoop 镜像".to_string(), url: "https://gitee.com/scoop-installer/scoop".to_string(), ping: None, is_default: None },
+            ],
+        });
+    }
 
     // 1. NPM: Read ~/.npmrc or query `npm config get registry`
     let mut npm_current = "https://registry.npmjs.org".to_string();
@@ -46,7 +86,7 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
         }
     }
     if npm_current == "https://registry.npmjs.org" {
-        if let Ok(out) = std::process::Command::new("npm").args(["config", "get", "registry"]).output() {
+        if let Ok(out) = env_helper::create_silent_command("npm").args(["config", "get", "registry"]).output() {
             if out.status.success() {
                 let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 if !s.is_empty() && s.starts_with("http") {
@@ -108,7 +148,7 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
 
     // 3. Go: Query `go env GOPROXY`
     let mut go_current = "https://proxy.golang.org,direct".to_string();
-    if let Ok(out) = std::process::Command::new("go").args(["env", "GOPROXY"]).output() {
+    if let Ok(out) = env_helper::create_silent_command("go").args(["env", "GOPROXY"]).output() {
         if out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if !s.is_empty() {
@@ -193,22 +233,6 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
             MirrorOption { name: "Docker 官方 Docker Hub".to_string(), url: "https://registry-1.docker.io".to_string(), ping: None, is_default: None },
         ],
     });
-
-    // 6. Homebrew (macOS / Linux only) or NuGet (.NET Windows)
-    #[cfg(not(target_os = "windows"))]
-    {
-        configs.push(MirrorConfig {
-            id: "brew".to_string(),
-            name: "Homebrew (macOS)".to_string(),
-            tool: "brew".to_string(),
-            current_mirror: "https://mirrors.ustc.edu.cn/homebrew-bottles".to_string(),
-            options: vec![
-                MirrorOption { name: "中国科学技术大学 USTC 镜像".to_string(), url: "https://mirrors.ustc.edu.cn/homebrew-bottles".to_string(), ping: None, is_default: Some(true) },
-                MirrorOption { name: "清华大学 TUNA 镜像".to_string(), url: "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles".to_string(), ping: None, is_default: None },
-                MirrorOption { name: "阿里云 Homebrew 镜像".to_string(), url: "https://mirrors.aliyun.com/homebrew/homebrew-bottles".to_string(), ping: None, is_default: None },
-            ],
-        });
-    }
 
     #[cfg(target_os = "windows")]
     {
@@ -330,12 +354,42 @@ pub async fn set_mirror(tool: String, mirror_url: String) -> Result<bool, String
             }
         }
         "go" => {
-            let status = crate::env_helper::create_silent_command("go")
-                .args(["env", "-w", &format!("GOPROXY={}", mirror_url)])
-                .status()
+            let proxy = format!("GOPROXY={}", mirror_url);
+            let mut cmd = crate::env_helper::create_silent_command("go");
+            cmd.current_dir(&home)
+                .args(["env", "-w", &proxy]);
+            let output = cmd
+                .output()
                 .map_err(|e| format!("执行 go env -w 失败: {}", e))?;
-            if !status.success() {
-                return Err("go env -w 执行返回非零退出码".to_string());
+            if !output.status.success() {
+                let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                // Some locked Windows profiles reject `go env -w`; persist a
+                // user-level GOPROXY fallback so the setting still applies.
+                let go_env = dirs::config_dir().unwrap_or_else(|| home.join("AppData/Roaming")).join("go/env");
+                if let Some(parent) = go_env.parent() { let _ = fs::create_dir_all(parent); }
+                let mut content = fs::read_to_string(&go_env).unwrap_or_default();
+                content.retain(|c| c != '\r');
+                let mut lines: Vec<&str> = content.lines().filter(|l| !l.starts_with("GOPROXY=")).collect();
+                lines.push(&proxy);
+                fs::write(&go_env, lines.join("\n") + "\n")
+                    .map_err(|e| format!("go env 写入失败: {}{}", e, if details.is_empty() { String::new() } else { format!(" ({})", details) }))?;
+            }
+        }
+        "scoop" => {
+            let output = crate::env_helper::create_silent_command("powershell")
+                .args([
+                    "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                    &format!("scoop config SCOOP_REPO '{}'", mirror_url.replace('\'', "''")),
+                ])
+                .output()
+                .map_err(|e| format!("执行 scoop config 失败: {}", e))?;
+            if !output.status.success() {
+                let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                return Err(if details.is_empty() {
+                    format!("Scoop 镜像配置失败，退出码: {:?}", output.status.code())
+                } else {
+                    format!("Scoop 镜像配置失败: {}", details)
+                });
             }
         }
         "cargo" => {

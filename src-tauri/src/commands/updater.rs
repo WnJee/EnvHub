@@ -26,8 +26,9 @@ pub async fn open_url_in_browser(url: String) -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
+        let quoted_url = format!("\"{}\"", url.replace('"', ""));
         let status = env_helper::create_silent_command("cmd")
-            .args(["/c", "start", "", &url])
+            .args(["/c", "start", "", &quoted_url])
             .status()
             .map_err(|e| format!("无法打开浏览器: {}", e))?;
         return Ok(status.success());
@@ -56,8 +57,11 @@ pub async fn open_path_in_file_manager(path: String) -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
+        // Explorer expects `/select,<path>` as a single argument. Passing it
+        // as two arguments fails for many paths (especially those with spaces).
+        let select_arg = format!("/select,{}", path);
         let status = env_helper::create_silent_command("explorer")
-            .args(["/select,", &path])
+            .arg(select_arg)
             .status()
             .map_err(|e| format!("无法在资源管理器中显示: {}", e))?;
         return Ok(status.success());
@@ -86,8 +90,9 @@ pub async fn open_installer_file(path: String) -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
+        let quoted_path = format!("\"{}\"", path.replace('"', ""));
         let status = env_helper::create_silent_command("cmd")
-            .args(["/c", "start", "", &path])
+            .args(["/c", "start", "", &quoted_path])
             .status()
             .map_err(|e| format!("无法打开安装包: {}", e))?;
         return Ok(status.success());
@@ -139,16 +144,19 @@ pub async fn relaunch_application(_app: AppHandle) -> Result<(), String> {
         if let Ok(entries) = std::fs::read_dir(&download_dir) {
             for entry in entries.flatten() {
                 let fname = entry.file_name().to_string_lossy().to_string();
-                if fname.starts_with("EnvHub_") && fname.ends_with("_x64-setup.exe") {
+                if fname.starts_with("EnvHub_")
+                    && fname.ends_with("-setup.exe")
+                    && (fname.contains("_x64-") || fname.contains("_arm64-") || fname.contains("_x86-")) {
                     installer_path = Some(entry.path());
                 }
             }
         }
 
         if let Some(inst) = installer_path {
+            let inst_escaped = inst.to_string_lossy().replace('\'', "''");
             let script = format!(
                 "Start-Sleep -Seconds 1; Start-Process -FilePath '{}' -ArgumentList '/S' -Wait",
-                inst.to_string_lossy()
+                inst_escaped
             );
             let _ = env_helper::create_silent_command("powershell")
                 .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &script])
@@ -182,11 +190,14 @@ pub async fn download_and_install_update(
             .map(|h| h.join("Downloads"))
             .unwrap_or_else(|| PathBuf::from("/tmp"))
     });
+    std::fs::create_dir_all(&download_dir)
+        .map_err(|e| format!("创建下载目录失败: {}", e))?;
 
     let filename = if cfg!(target_os = "macos") {
         format!("EnvHub_{}_universal.dmg", version)
     } else if cfg!(target_os = "windows") {
-        format!("EnvHub_{}_x64-setup.exe", version)
+        let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" };
+        format!("EnvHub_{}_{}-setup.exe", version, arch)
     } else {
         format!("EnvHub_{}_amd64.AppImage", version)
     };
@@ -208,6 +219,8 @@ pub async fn download_and_install_update(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("启动下载进程失败: {}", e))?;
+    let child_pid = child.id();
+    env_helper::set_active_install_pid(child_pid);
 
     let stderr = child.stderr.take();
     let app_clone = app.clone();
@@ -239,6 +252,7 @@ pub async fn download_and_install_update(
     }
 
     let status = child.wait().await.map_err(|e| format!("等待下载完成失败: {}", e))?;
+    env_helper::clear_active_install_pid(child_pid);
     if !status.success() {
         return Err(format!("下载失败，请检查网络或在浏览器中下载，退出码: {:?}", status.code()));
     }

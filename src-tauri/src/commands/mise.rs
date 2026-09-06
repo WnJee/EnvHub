@@ -349,6 +349,13 @@ fn get_mise_config_paths() -> Vec<PathBuf> {
     paths
 }
 
+/// Runtime management is global. Always execute mise from the user's home
+/// directory so a project's untrusted `.mise.toml` cannot block the desktop
+/// application or accidentally influence a global install.
+fn mise_working_dir() -> PathBuf {
+    dirs::home_dir().unwrap_or_else(std::env::temp_dir)
+}
+
 #[tauri::command]
 pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
     // Ensure the latest prioritized PATH is active
@@ -364,7 +371,14 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
         let mut available_versions: Vec<String> = Vec::new();
 
         // 1. Probe host system executable with fallback binary paths
-        let mut probe_execs = vec![meta.exec_name.to_string()];
+        // Windows commonly exposes Python as `python.exe` (and sometimes `py.exe`),
+        // while Unix uses `python3`. Probe the native names first so the runtime is
+        // detected correctly from a GUI-launched process.
+        let mut probe_execs = if cfg!(target_os = "windows") && meta.id == "python" {
+            vec!["python".to_string(), "py".to_string(), "python3".to_string()]
+        } else {
+            vec![meta.exec_name.to_string()]
+        };
         if let Some(home) = dirs::home_dir() {
             match meta.id {
                 "go" => {
@@ -451,7 +465,7 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
         if let Some(ref bin) = mise_bin {
             let bin_str = bin.to_string_lossy();
             for alias in meta.mise_aliases {
-                if let Ok(output) = env_helper::create_silent_command(&bin_str).args(["ls", "--json", alias]).output() {
+                if let Ok(output) = env_helper::create_silent_command(&bin_str).current_dir(mise_working_dir()).args(["ls", "--json", alias]).output() {
                     if output.status.success() {
                         if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
                             if let Some(arr) = json_val.as_array() {
@@ -478,7 +492,7 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
 
             // Query Mise current active version
             if active_version.is_none() {
-                if let Ok(cur_out) = env_helper::create_silent_command(&bin_str).args(["current", meta.id]).output() {
+                if let Ok(cur_out) = env_helper::create_silent_command(&bin_str).current_dir(mise_working_dir()).args(["current", meta.id]).output() {
                     if cur_out.status.success() {
                         let cur_str = String::from_utf8_lossy(&cur_out.stdout).trim().to_string();
                         if !cur_str.is_empty() && !cur_str.starts_with("No version") {
@@ -497,7 +511,7 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
             }
 
             // Remote versions from mise ls-remote
-            if let Ok(output) = env_helper::create_silent_command(&bin_str).args(["ls-remote", meta.id]).output() {
+            if let Ok(output) = env_helper::create_silent_command(&bin_str).current_dir(mise_working_dir()).args(["ls-remote", meta.id]).output() {
                 if output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     let raw_list: Vec<String> = stdout
@@ -663,7 +677,13 @@ fn filter_latest_minor_versions(versions: Vec<String>) -> Vec<String> {
 
     for v in versions {
         let trimmed = v.trim().trim_start_matches('v');
-        let parts: Vec<&str> = trimmed.split('.').collect();
+        // Several mise backends prefix versions with a distribution name
+        // (for example `temurin-21.0.6` or `corretto-jre-17.0.12`). Parse
+        // the first numeric component rather than treating those entries as
+        // opaque strings, otherwise the Windows UI only shows old releases.
+        let version_start = trimmed.find(|c: char| c.is_ascii_digit());
+        let numeric_version = version_start.map(|index| &trimmed[index..]).unwrap_or(trimmed);
+        let parts: Vec<&str> = numeric_version.split('.').collect();
         if parts.len() >= 2 {
             let major = parts[0].parse::<u64>();
             let minor = parts[1].parse::<u64>();
@@ -711,8 +731,9 @@ fn filter_latest_minor_versions(versions: Vec<String>) -> Vec<String> {
 
 #[tauri::command]
 pub async fn get_remote_versions(tool_id: String) -> Result<Vec<String>, String> {
+    env_helper::fix_system_path();
     if let Some(bin) = env_helper::find_mise_binary() {
-        if let Ok(output) = std::process::Command::new(&bin).args(["ls-remote", &tool_id]).output() {
+        if let Ok(output) = env_helper::create_silent_command(&bin.to_string_lossy()).current_dir(mise_working_dir()).args(["ls-remote", &tool_id]).output() {
             if output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let raw_list: Vec<String> = stdout
@@ -733,9 +754,11 @@ pub async fn get_remote_versions(tool_id: String) -> Result<Vec<String>, String>
 
 #[tauri::command]
 pub async fn set_global_version(tool_id: String, version: String) -> Result<bool, String> {
+    env_helper::fix_system_path();
     if let Some(bin) = env_helper::find_mise_binary() {
         let target = format!("{}@{}", tool_id, version);
         let status = env_helper::create_silent_tokio_command(&bin.to_string_lossy())
+            .current_dir(mise_working_dir())
             .args(["use", "-g", &target])
             .status()
             .await
@@ -751,6 +774,7 @@ pub async fn set_global_version(tool_id: String, version: String) -> Result<bool
 
 #[tauri::command]
 pub async fn uninstall_runtime_version(tool_id: String, version: String) -> Result<bool, String> {
+    env_helper::fix_system_path();
     let clean_ver = version.trim().trim_start_matches('v').to_string();
 
     // 1. Run mise uninstall <tool>@<version>
@@ -761,6 +785,7 @@ pub async fn uninstall_runtime_version(tool_id: String, version: String) -> Resu
         ];
         for target in targets {
             let _ = env_helper::create_silent_tokio_command(&bin.to_string_lossy())
+                .current_dir(mise_working_dir())
                 .args(["uninstall", &target])
                 .status()
                 .await;
@@ -823,7 +848,8 @@ pub async fn install_runtime_version(
     let _ = app.emit("install-progress", 10);
 
     let mut cmd = env_helper::create_silent_tokio_command(&mise_bin.to_string_lossy());
-    cmd.args(["install", &target, "--verbose"])
+    cmd.current_dir(mise_working_dir())
+        .args(["install", &target, "--verbose"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -833,6 +859,8 @@ pub async fn install_runtime_version(
 
     let mut child = cmd.spawn()
         .map_err(|e| format!("启动安装进程失败: {}", e))?;
+    let child_pid = child.id();
+    env_helper::set_active_install_pid(child_pid);
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -877,6 +905,7 @@ pub async fn install_runtime_version(
     }
 
     let status = child.wait().await.map_err(|e| format!("等待安装完成失败: {}", e))?;
+    env_helper::clear_active_install_pid(child_pid);
     if status.success() {
         let _ = app.emit("install-log", format!("✓ {} 安装成功！已完成环境注入与软链接配置", target));
         let _ = app.emit("install-progress", 100);
@@ -891,6 +920,11 @@ pub async fn install_runtime_version(
 }
 
 #[tauri::command]
+pub async fn cancel_current_install() -> Result<bool, String> {
+    env_helper::cancel_active_install()
+}
+
+#[tauri::command]
 pub async fn bootstrap_mise_cli(app: AppHandle) -> Result<bool, String> {
     let _ = app.emit("install-log", "> 正在初始化 Mise CLI 跨平台运行时引擎安装程序...".to_string());
     let _ = app.emit("install-progress", 10);
@@ -902,14 +936,15 @@ pub async fn bootstrap_mise_cli(app: AppHandle) -> Result<bool, String> {
         let _ = app.emit("install-progress", 25);
 
         let direct_download_ps = r#"
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13;
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;
             $binDir = "$env:LOCALAPPDATA\mise\bin";
             if (-not (Test-Path $binDir)) {
                 New-Item -ItemType Directory -Force -Path $binDir | Out-Null;
             }
             $exePath = "$binDir\mise.exe";
             try {
-                Invoke-WebRequest -Uri "https://mise.jdx.dev/mise-latest-windows-x64.exe" -OutFile $exePath -TimeoutSec 30;
+                $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' };
+                Invoke-WebRequest -Uri "https://mise.jdx.dev/mise-latest-windows-$arch.exe" -OutFile $exePath -TimeoutSec 30;
                 if (Test-Path $exePath) {
                     & $exePath --version
                     exit 0
@@ -941,7 +976,7 @@ pub async fn bootstrap_mise_cli(app: AppHandle) -> Result<bool, String> {
         let _ = app.emit("install-progress", 45);
 
         let script_ps = r#"
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13;
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;
             Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force;
             irm https://mise.jdx.dev/install.ps1 | iex
         "#;
@@ -1074,7 +1109,12 @@ pub async fn open_terminal_for_runtime(tool_id: String, version: String) -> Resu
 
     let (exec, args): (&str, &[&str]) = match tool_id.as_str() {
         "node" => ("node", &["--version"]),
-        "python" => ("python3", &["--version"]),
+        "python" => {
+            #[cfg(target_os = "windows")]
+            { ("python", &["--version"]) }
+            #[cfg(not(target_os = "windows"))]
+            { ("python3", &["--version"]) }
+        },
         "go" => ("go", &["version"]),
         "rust" => ("rustc", &["--version"]),
         "java" => ("java", &["-version"]),
@@ -1094,18 +1134,13 @@ pub async fn open_terminal_for_runtime(tool_id: String, version: String) -> Resu
         _ => (&tool_id, &["--version"]),
     };
 
-    let probe_out = env_helper::create_silent_command(exec).args(args).output();
-    let version_output = if let Ok(out) = probe_out {
-        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        if !stdout.is_empty() { stdout } else { stderr }
-    } else {
-        format!("{} v{}", tool_id, version)
-    };
+    let mise = env_helper::find_mise_binary().ok_or_else(|| "未找到 Mise CLI".to_string())?;
+    let target = format!("{}@{}", tool_id, version);
+    let command_args = args.join(" ");
 
     #[cfg(target_os = "macos")]
     {
-        let script = format!("echo '=== EnvHub 环境检测: {} ==='; {} {}; echo ''; exec $SHELL", tool_id, exec, args.join(" "));
+        let script = format!("echo '=== EnvHub 环境检测: {} {} ==='; '{}' exec '{}' -- {} {}; echo ''; exec $SHELL", tool_id, version, mise.display(), target, exec, command_args);
         let _ = std::process::Command::new("osascript")
             .args(["-e", &format!("tell application \"Terminal\" to do script \"{}\"", script)])
             .status();
@@ -1113,15 +1148,24 @@ pub async fn open_terminal_for_runtime(tool_id: String, version: String) -> Resu
 
     #[cfg(target_os = "windows")]
     {
-        let _ = std::process::Command::new("cmd")
-            .args(["/c", "start", "powershell", "-NoExit", "-Command", &format!("Write-Host '=== EnvHub 环境检测: {} ===' -ForegroundColor Cyan; {} {}; Write-Host ''", tool_id, exec, args.join(" "))])
-            .status();
+        let script = format!(
+            "Write-Host '=== EnvHub 环境检测: {} {} ===' -ForegroundColor Cyan; & '{}' exec '{}' -- {} {}; Write-Host ''; Write-Host '可关闭此终端窗口' -ForegroundColor DarkGray",
+            tool_id, version, mise.display(), target, exec, command_args
+        );
+        std::process::Command::new("cmd.exe")
+            .args(["/c", "start", "", "powershell.exe", "-NoExit", "-NoProfile", "-Command", &script])
+            .spawn()
+            .map_err(|e| format!("打开终端失败: {}", e))?;
     }
 
     #[cfg(target_os = "linux")]
     {
-        let _ = std::process::Command::new("x-terminal-emulator").status();
+        let command = format!("'{}' exec '{}' -- {} {}; exec $SHELL", mise.display(), target, exec, command_args);
+        std::process::Command::new("x-terminal-emulator")
+            .args(["-e", "sh", "-lc", &command])
+            .spawn()
+            .map_err(|e| format!("打开终端失败: {}", e))?;
     }
 
-    Ok(version_output)
+    Ok(format!("已在终端执行 {} {}", exec, command_args))
 }

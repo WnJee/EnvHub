@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::fs::{self, OpenOptions};
+use std::fs;
+#[cfg(not(target_os = "windows"))]
+use std::fs::OpenOptions;
+#[cfg(not(target_os = "windows"))]
 use std::io::Write;
 use std::process::Stdio;
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use crate::env_helper;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -56,6 +58,9 @@ pub struct EnvHealthCheck {
 
 #[tauri::command]
 pub async fn get_system_status() -> Result<SystemStatus, String> {
+    // A Tauri GUI launched from Explorer inherits a minimal/stale PATH.
+    // Normalize it before probing mise and package managers.
+    env_helper::fix_system_path();
     let os_name = if cfg!(target_os = "macos") {
         "macos"
     } else if cfg!(target_os = "windows") {
@@ -99,18 +104,18 @@ pub async fn get_system_status() -> Result<SystemStatus, String> {
     }
 
     let pkg_manager = if cfg!(target_os = "macos") {
-        if env_helper::create_silent_command("brew").arg("--version").output().is_ok() {
+        if env_helper::create_silent_command("brew").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
             "brew"
         } else {
             "none"
         }
     } else if cfg!(target_os = "windows") {
-        if env_helper::create_silent_command("winget").arg("--version").output().is_ok() {
+        if env_helper::create_silent_command("winget").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) || env_helper::command_available("winget") {
             "winget"
-        } else if env_helper::create_silent_command("scoop").arg("--version").output().is_ok() {
+        } else if env_helper::create_silent_command("scoop").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) || env_helper::command_available("scoop") {
             "scoop"
         } else {
-            "winget"
+            "none"
         }
     } else {
         "apt"
@@ -130,6 +135,7 @@ pub async fn get_system_status() -> Result<SystemStatus, String> {
 
 #[tauri::command]
 pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
+    env_helper::fix_system_path();
     let mut tools = Vec::new();
 
     #[cfg(not(target_os = "windows"))]
@@ -378,7 +384,28 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    for tool in &mut tools {
+        if tool.id != "scoop" {
+            // Windows installs use Scoop first. `install_system_tool` only
+            // falls back to WinGet when Scoop is unavailable.
+            tool.install_command = format!("scoop install {}", scoop_package_for(&tool.id));
+        }
+    }
+
     Ok(tools)
+}
+
+#[cfg(target_os = "windows")]
+fn scoop_package_for(tool_id: &str) -> &str {
+    match tool_id {
+        "docker-compose" => "docker-compose",
+        "postgresql" => "postgresql",
+        "mongodb" => "mongodb",
+        "ripgrep" => "ripgrep",
+        "neovim" => "neovim",
+        _ => tool_id,
+    }
 }
 
 fn probe_tool_version(tool_id: &str) -> Option<String> {
@@ -437,11 +464,17 @@ fn probe_tool_version(tool_id: &str) -> Option<String> {
                     return Some(raw.lines().next().unwrap_or("installed").trim().to_string());
                 }
             }
+            if env_helper::command_available("scoop") {
+                return Some("已安装（版本信息暂不可用）".to_string());
+            }
         }
         return None;
     }
 
     let (cmd, args): (&str, &[&str]) = match tool_id {
+        // Docker Desktop on Windows (and recent Linux/macOS installs) exposes
+        // Compose as the `docker compose` subcommand rather than a standalone
+        // `docker-compose` executable. Keep the standalone probe as a fallback.
         "docker-compose" => ("docker-compose", &["--version"]),
         "nginx" => ("nginx", &["-v"]),
         "redis" => ("redis-server", &["--version"]),
@@ -514,6 +547,7 @@ fn probe_tool_version(tool_id: &str) -> Option<String> {
 
 #[tauri::command]
 pub async fn test_system_tool(tool_id: String) -> Result<String, String> {
+    env_helper::fix_system_path();
     if tool_id == "brew" || tool_id == "homebrew" {
         for b in &["brew", "/opt/homebrew/bin/brew", "/usr/local/bin/brew", "/home/linuxbrew/.linuxbrew/bin/brew"] {
             if let Ok(output) = env_helper::create_silent_command(b).arg("--version").output() {
@@ -547,15 +581,58 @@ pub async fn test_system_tool(tool_id: String) -> Result<String, String> {
                     return Ok(format!("测试成功: {}", first_line));
                 }
             }
+            if env_helper::command_available("scoop") {
+                return Ok("测试成功: Scoop shim 已就绪（版本信息暂不可用）".to_string());
+            }
         }
         return Err("未检测到 Scoop 命令".to_string());
     }
 
-    let binary_name = if tool_id == "neovim" { "nvim" } else if tool_id == "ripgrep" { "rg" } else { &tool_id };
-    let output = env_helper::create_silent_command(binary_name)
-        .arg("--version")
-        .output()
-        .map_err(|e| format!("无法执行 {}: {}", binary_name, e))?;
+    if tool_id == "docker-compose" {
+        if let Ok(output) = env_helper::create_silent_command("docker").args(["compose", "version"]).output() {
+            if output.status.success() {
+                let text = String::from_utf8_lossy(&output.stdout);
+                return Ok(format!("测试成功: {}", text.lines().next().unwrap_or("Docker Compose").trim()));
+            }
+        }
+    }
+
+    let binary_name = if tool_id == "neovim" {
+        "nvim"
+    } else if tool_id == "ripgrep" {
+        "rg"
+    } else if tool_id == "fd" {
+        if cfg!(target_os = "linux") { "fdfind" } else { "fd" }
+    } else if tool_id == "postgresql" {
+        "psql"
+    } else if tool_id == "mongodb" {
+        "mongod"
+    } else if tool_id == "redis" {
+        "redis-server"
+    } else {
+        &tool_id
+    };
+    let output = match env_helper::create_silent_command(binary_name).arg("--version").output() {
+        Ok(output) => {
+            if output.status.success() || tool_id != "redis" {
+                output
+            } else {
+                // Windows Redis distributions often ship only redis-cli.exe.
+                env_helper::create_silent_command("redis-cli")
+                    .arg("--version")
+                    .output()
+                    .map_err(|e| format!("无法执行 redis-cli: {}", e))?
+            }
+        }
+        Err(_err) if tool_id == "redis" => {
+            // Windows Redis distributions often ship only redis-cli.exe.
+            env_helper::create_silent_command("redis-cli")
+                .arg("--version")
+                .output()
+                .map_err(|e| format!("无法执行 redis-cli: {}", e))?
+        }
+        Err(err) => return Err(format!("无法执行 {}: {}", binary_name, err)),
+    };
 
     if output.status.success() {
         let out_str = String::from_utf8_lossy(&output.stdout);
@@ -568,33 +645,42 @@ pub async fn test_system_tool(tool_id: String) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool, String> {
+    // GUI applications inherit a stale PATH. Refresh it before looking for
+    // Scoop/WinGet or any other package manager installed after app launch.
+    env_helper::fix_system_path();
     let _ = app.emit("install-log", format!("> 开始安装系统工具: {}", tool_id));
     let _ = app.emit("install-progress", 10);
 
     #[cfg(target_os = "windows")]
     {
-        if tool_id == "scoop" {
+    if tool_id == "scoop" {
             let script = r#"
-                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13;
+                # TLS 1.2 is available in Windows PowerShell 5.1 and newer.
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;
                 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force;
                 irm get.scoop.sh | iex
             "#;
             let _ = app.emit("install-log", "正在执行 Scoop 安装脚本...".to_string());
-            let status = env_helper::create_silent_tokio_command("powershell")
+            let output = env_helper::create_silent_tokio_command("powershell")
                 .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
-                .status()
+                .output()
                 .await
                 .map_err(|e| format!("安装 Scoop 失败: {}", e))?;
 
-            if !status.success() {
-                return Err(format!("安装 Scoop 返回退出码: {:?}", status.code()));
+            if !output.status.success() {
+                let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                return Err(if details.is_empty() {
+                    format!("安装 Scoop 返回退出码: {:?}", output.status.code())
+                } else {
+                    format!("安装 Scoop 失败: {}", details)
+                });
             }
             env_helper::fix_system_path();
             let _ = app.emit("install-progress", 100);
             return Ok(true);
         }
 
-        let has_scoop = env_helper::create_silent_command("scoop").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
+        let has_scoop = env_helper::create_silent_command("scoop").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) || env_helper::command_available("scoop");
         let has_winget = env_helper::create_silent_command("winget").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
 
         let (scoop_pkg, winget_pkg): (&str, &str) = match tool_id.as_str() {
@@ -630,42 +716,32 @@ pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool
             return Err("未在 Windows 系统中检测到 Scoop 或 WinGet，请先在工具箱首位安装 Scoop".to_string());
         };
 
-        let mut child = env_helper::create_silent_tokio_command("powershell")
+        let child = env_helper::create_silent_tokio_command("powershell")
             .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &cmd_string])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("启动安装进程失败: {}", e))?;
+        let child_pid = child.id();
+        env_helper::set_active_install_pid(child_pid);
+        let output = child.wait_with_output().await
+            .map_err(|e| format!("等待安装完成失败: {}", e))?;
+        env_helper::clear_active_install_pid(child_pid);
 
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        let app_c1 = app.clone();
-        if let Some(stdout) = stdout {
-            let reader = BufReader::new(stdout);
-            let mut lines = reader.lines();
-            tokio::spawn(async move {
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = app_c1.emit("install-log", line);
-                }
-            });
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        for line in stdout.lines().chain(stderr.lines()) {
+            let _ = app.emit("install-log", line.to_string());
         }
 
-        let app_c2 = app.clone();
-        if let Some(stderr) = stderr {
-            let reader = BufReader::new(stderr);
-            let mut lines = reader.lines();
-            tokio::spawn(async move {
-                while let Ok(Some(line)) = lines.next_line().await {
-                    let _ = app_c2.emit("install-log", line);
-                }
+        if !output.status.success() {
+            let details = if stderr.is_empty() { stdout } else { stderr };
+            let _ = app.emit("install-log", format!("❌ 安装失败，退出码: {:?}", output.status.code()));
+            return Err(if details.is_empty() {
+                format!("安装执行失败，退出码: {:?}", output.status.code())
+            } else {
+                format!("安装执行失败: {}", details)
             });
-        }
-
-        let status = child.wait().await.map_err(|e| format!("等待安装完成失败: {}", e))?;
-        if !status.success() {
-            let _ = app.emit("install-log", format!("❌ 安装失败，退出码: {:?}", status.code()));
-            return Err(format!("安装执行失败，退出码: {:?}", status.code()));
         }
         let _ = app.emit("install-log", format!("✓ {} 安装成功！", tool_id));
         let _ = app.emit("install-progress", 100);
@@ -887,7 +963,7 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
 
     // 3. Package Manager check
     let (pkg_mgr_ok, pkg_mgr_name, pkg_mgr_msg) = if is_windows {
-        let has_scoop = env_helper::create_silent_command("scoop").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
+        let has_scoop = env_helper::create_silent_command("scoop").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) || env_helper::command_available("scoop");
         let has_winget = env_helper::create_silent_command("winget").arg("--version").output().map(|o| o.status.success()).unwrap_or(false);
         if has_scoop {
             (true, "Scoop".to_string(), "Scoop 包管理器处于就绪状态，支持自动安装底层 CLI 依赖".to_string())
@@ -927,18 +1003,24 @@ pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
         {
             // Install Scoop on Windows with TLS 1.2
             let script = r#"
-                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13;
+                # TLS 1.2 is available in Windows PowerShell 5.1 and newer.
+                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;
                 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force;
                 irm get.scoop.sh | iex
             "#;
-            let status = env_helper::create_silent_tokio_command("powershell")
+            let output = env_helper::create_silent_tokio_command("powershell")
                 .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
-                .status()
+                .output()
                 .await
                 .map_err(|e| format!("安装 Scoop 失败: {}", e))?;
 
-            if !status.success() {
-                return Err(format!("安装 Scoop 返回退出码: {:?}", status.code()));
+            if !output.status.success() {
+                let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                return Err(if details.is_empty() {
+                    format!("安装 Scoop 返回退出码: {:?}", output.status.code())
+                } else {
+                    format!("安装 Scoop 失败: {}", details)
+                });
             }
             env_helper::fix_system_path();
             return Ok(true);
@@ -959,8 +1041,8 @@ pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
             }
             env_helper::fix_system_path();
             return Ok(true);
+            }
         }
-    }
 
     if let Some(home) = dirs::home_dir() {
         #[cfg(target_os = "windows")]

@@ -68,6 +68,14 @@ if ! command -v mise &> /dev/null; then
 else
   log_succ "已检测到 mise: \$(mise --version)"
 fi
+MISE_BIN="\$(command -v mise || true)"
+if [ -z "\$MISE_BIN" ]; then
+  for candidate in "\$HOME/.local/bin/mise" "\$HOME/.local/share/mise/bin/mise"; do
+    if [ -x "\$candidate" ]; then MISE_BIN="\$candidate"; break; fi
+  done
+fi
+[ -n "\$MISE_BIN" ] || { echo "未找到 mise 可执行文件" >&2; exit 1; }
+cd "\$HOME"
 
 # 2. 配置 Shell 环境变量与激活 Hook
 ${
@@ -79,21 +87,21 @@ export PATH="\$HOME/.local/share/mise/shims:\$HOME/.local/bin:\$PATH"
 setup_shell_hook() {
   local rc_file="\$1"
   local hook_cmd="\$2"
-  if [ -f "\$rc_file" ]; then
-    if ! grep -q "mise activate" "\$rc_file" 2>/dev/null; then
-      echo -e "\\n# === EnvHub / Mise Activation Hook ===" >> "\$rc_file"
-      echo 'export PATH="\$HOME/.local/share/mise/shims:\$PATH"' >> "\$rc_file"
-      echo "\$hook_cmd" >> "\$rc_file"
-      log_succ "已注入环境配置到: \$rc_file"
-    else
-      log_info "\$rc_file 已存在 mise 激活配置"
-    fi
+  touch "\$rc_file"
+  if ! grep -q "mise activate" "\$rc_file" 2>/dev/null; then
+    echo -e "\\n# === EnvHub / Mise Activation Hook ===" >> "\$rc_file"
+    echo 'export PATH="\$HOME/.local/share/mise/shims:\$HOME/.local/bin:\$PATH"' >> "\$rc_file"
+    echo "\$hook_cmd" >> "\$rc_file"
+    log_succ "已注入环境配置到: \$rc_file"
+  else
+    log_info "\$rc_file 已存在 mise 激活配置"
   fi
 }
 
-[ -f "\$HOME/.zshrc" ] && setup_shell_hook "\$HOME/.zshrc" 'eval "\$(~/.local/bin/mise activate zsh)"'
-[ -f "\$HOME/.bashrc" ] && setup_shell_hook "\$HOME/.bashrc" 'eval "\$(~/.local/bin/mise activate bash)"'
-[ -f "\$HOME/.zprofile" ] && setup_shell_hook "\$HOME/.zprofile" 'eval "\$(~/.local/bin/mise activate zsh)"'
+case "\${SHELL##*/}" in
+  zsh) setup_shell_hook "\$HOME/.zshrc" 'eval "\$(mise activate zsh)"'; setup_shell_hook "\$HOME/.zprofile" 'eval "\$(mise activate zsh)"' ;;
+  *) setup_shell_hook "\$HOME/.bashrc" 'eval "\$(mise activate bash)"' ;;
+esac
 `
     : `# 跳过环境变量注入配置`
 }
@@ -148,21 +156,28 @@ install_tool() {
   local ver="\$2"
   local name="\$3"
   log_info "正在安装 \${name} (\${tool_id}@\${ver})..."
-  mise use -g "\${tool_id}@\${ver}"
+  "\$MISE_BIN" use -g "\${tool_id}@\${ver}"
   log_succ "\${name} \${ver} 已安装并设为主用版本"
 }
 
 ${toolInstalls}
 
 # 刷新全局 Shims
-mise reshim
+"\$MISE_BIN" reshim
+
+${options.includeMirrors ? `# Apply mirrors that require their runtime after installation.
+if command -v npm &> /dev/null; then npm config set registry https://registry.npmmirror.com/ || true; fi
+if command -v go &> /dev/null; then go env -w GOPROXY=https://goproxy.cn,direct || true; fi
+if command -v brew &> /dev/null; then
+  export HOMEBREW_BOTTLE_DOMAIN=https://mirrors.ustc.edu.cn/homebrew-bottles
+fi` : ''}
 
 # 5. 验证安装结果
 log_step "环境部署完成！验证当前主用版本："
 
 verify_tool() {
   local tool_id="\$1"
-  local current=\$(mise current "\$tool_id" 2>/dev/null || echo "未就绪")
+  local current=\$("\$MISE_BIN" current "\$tool_id" 2>/dev/null || echo "未就绪")
   echo -e "  \${GREEN}✔\${NC} \${BOLD}\${tool_id}\${NC}: \${CYAN}\${current}\${NC}"
 }
 
@@ -171,7 +186,7 @@ ${toolVerifications}
 echo ""
 log_succ "🎉 全部语言环境与版本配置部署完成！"
 log_warn "请重启终端，或执行以下命令使新环境变量立即生效："
-if [ -n "\$ZSH_VERSION" ] || [ "\$SHELL" = "*/zsh" ]; then
+if [ -n "\${ZSH_VERSION:-}" ] || [ "\${SHELL##*/}" = "zsh" ]; then
   echo -e "  \${BOLD}\${CYAN}source ~/.zshrc\${NC}\\n"
 else
   echo -e "  \${BOLD}\${CYAN}source ~/.bashrc\${NC}\\n"
@@ -245,11 +260,26 @@ $MiseCmd = Get-Command "mise" -ErrorAction SilentlyContinue
 if (-not $MiseCmd) {
     Write-EnvInfo "未检测到 mise CLI，正在通过官方 PowerShell 脚本安装..."
     irm https://mise.jdx.dev/install.ps1 | iex
-    $env:Path = "$env:LOCALAPPDATA\\mise\\bin;$env:LOCALAPPDATA\\mise\\shims;" + $env:Path
     Write-EnvSucc "Mise 引擎安装完成"
 } else {
-    Write-EnvSucc "已检测到 Mise: $((mise --version))"
+    Write-EnvSucc "已检测到 Mise: $(mise --version)"
 }
+
+$MiseExe = if ($MiseCmd) { $MiseCmd.Source } else { $null }
+if (-not $MiseExe) {
+    $MiseCandidates = @(
+        "$env:LOCALAPPDATA\\mise\\bin\\mise.exe",
+        "$env:USERPROFILE\\.local\\bin\\mise.exe",
+        "$env:USERPROFILE\\scoop\\shims\\mise.exe"
+    )
+    $MiseExe = $MiseCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+if (-not $MiseExe) { throw "Mise 安装完成但未找到可执行文件，请重新打开 PowerShell 后重试" }
+
+$MiseBinDir = Split-Path -Parent $MiseExe
+$MiseShims = "$env:LOCALAPPDATA\\mise\\shims"
+$env:Path = "$MiseBinDir;$MiseShims;$env:USERPROFILE\\scoop\\shims;" + $env:Path
+Set-Location $env:USERPROFILE
 
 # 2. 注入 PowerShell Profile 环境变量与 Shims
 ${
@@ -260,7 +290,11 @@ if (-not (Test-Path $ProfileDir)) {
     New-Item -ItemType Directory -Path $ProfileDir -Force | Out-Null
 }
 
-$MiseHook = "\`n# === EnvHub / Mise Activation Hook ===\`n(& mise activate ps1) | Out-String | Invoke-Expression\`n"
+$MiseHook = @'
+# === EnvHub / Mise Activation Hook ===
+$MiseCommand = Get-Command mise -ErrorAction SilentlyContinue
+if ($MiseCommand) { (& $MiseCommand.Source activate ps1) | Out-String | Invoke-Expression }
+'@
 if (Test-Path $PROFILE) {
     $ExistingProfile = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
     if ($ExistingProfile -notmatch "mise activate") {
@@ -271,6 +305,14 @@ if (Test-Path $PROFILE) {
     Set-Content -Path $PROFILE -Value $MiseHook
     Write-EnvSucc "已创建并配置 Profile: $PROFILE"
 }
+
+$UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+foreach ($PathEntry in @($MiseBinDir, $MiseShims, "$env:USERPROFILE\\scoop\\shims")) {
+    if ($PathEntry -and (Test-Path $PathEntry) -and $UserPath -notlike "*$PathEntry*") {
+        $UserPath = "$PathEntry;$UserPath"
+    }
+}
+[Environment]::SetEnvironmentVariable("Path", $UserPath, "User")
 `
     : `# 跳过 PowerShell Profile 注入`
 }
@@ -330,20 +372,32 @@ function Install-EnvTool {
         [string]$Name
     )
     Write-EnvInfo "正在安装 $Name ($ToolId@$Version)..."
-    mise use -g "$ToolId@$Version"
+    & $MiseExe use -g "$ToolId@$Version"
+    if ($LASTEXITCODE -ne 0) { throw "安装 $ToolId@$Version 失败，退出码: $LASTEXITCODE" }
     Write-EnvSucc "$Name $Version 已成功安装并激活"
 }
 
 ${toolInstalls}
 
-mise reshim
+& $MiseExe reshim
+
+${options.includeMirrors ? `# Apply mirrors that require their runtime after installation.
+if (Get-Command "npm" -ErrorAction SilentlyContinue) {
+    npm config set registry https://registry.npmmirror.com/ | Out-Null
+}
+if (Get-Command "go" -ErrorAction SilentlyContinue) {
+    go env -w GOPROXY="https://goproxy.cn,direct" | Out-Null
+}
+if (Get-Command "scoop" -ErrorAction SilentlyContinue) {
+    scoop config SCOOP_REPO "https://github.com/ScoopInstaller/Scoop" | Out-Null
+}` : ''}
 
 # 5. 验证安装结果
 Write-EnvStep "验证当前主用版本状态："
 
 function Verify-EnvTool {
     param([string]$ToolId)
-    $Current = mise current $ToolId 2>$null
+    $Current = & $MiseExe current $ToolId 2>$null
     Write-Host "  [✔] $ToolId : " -NoNewline -ForegroundColor Green
     Write-Host "$Current" -ForegroundColor Cyan
 }

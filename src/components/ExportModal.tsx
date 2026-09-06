@@ -39,7 +39,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   runtimes
 }) => {
   const toast = useToast();
-  const [activeTab, setActiveTab] = useState<PlatformTab>('sh');
+  const [activeTab, setActiveTab] = useState<PlatformTab>(() =>
+    typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('win') ? 'ps1' : 'sh'
+  );
   const [includeMirrors, setIncludeMirrors] = useState<boolean>(true);
   const [includeEnvHook, setIncludeEnvHook] = useState<boolean>(true);
   const [copied, setCopied] = useState<boolean>(false);
@@ -125,7 +127,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       case 'bat':
         return '.\\setup_envhub.bat';
       case 'toml':
-        return 'mise install';
+        return 'mise trust .mise.toml && mise install';
     }
   }, [activeTab]);
 
@@ -151,6 +153,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
   const handleSaveFile = async () => {
     try {
+      if (activeTab === 'bat') {
+        // The batch file launches this companion script, so export both files.
+        await api.saveExportFile(
+          'setup_envhub.ps1',
+          generateWindowsPowerShellScript(toolItems, { includeMirrors, includeEnvHook })
+        );
+      }
       const path = await api.saveExportFile(currentFilename, scriptContent);
       setSavedPath(path);
       toast.success(`已保存到: ${path}`, '脚本保存成功');

@@ -1,15 +1,46 @@
 use std::env;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
 pub const CREATE_NO_WINDOW: u32 = 0x08000000;
+static ACTIVE_INSTALL_PID: AtomicU32 = AtomicU32::new(0);
+
+pub fn set_active_install_pid(pid: Option<u32>) {
+    ACTIVE_INSTALL_PID.store(pid.unwrap_or(0), Ordering::SeqCst);
+}
+
+pub fn clear_active_install_pid(pid: Option<u32>) {
+    if let Some(pid) = pid {
+        let _ = ACTIVE_INSTALL_PID.compare_exchange(pid, 0, Ordering::SeqCst, Ordering::SeqCst);
+    }
+}
+
+pub fn cancel_active_install() -> Result<bool, String> {
+    let pid = ACTIVE_INSTALL_PID.swap(0, Ordering::SeqCst);
+    if pid == 0 { return Ok(false); }
+
+    #[cfg(target_os = "windows")]
+    let status = create_silent_command("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status();
+    #[cfg(not(target_os = "windows"))]
+    let status = std::process::Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status();
+
+    status
+        .map(|status| status.success())
+        .map_err(|e| format!("终止安装进程失败: {}", e))
+}
 
 /// Create a synchronous Command with hidden console window on Windows
 pub fn create_silent_command(program: &str) -> std::process::Command {
     #[allow(unused_mut)]
-    let mut cmd = std::process::Command::new(program);
+    let resolved_program = resolve_windows_program(program);
+    let mut cmd = std::process::Command::new(resolved_program);
     #[cfg(target_os = "windows")]
     {
         cmd.creation_flags(CREATE_NO_WINDOW);
@@ -20,12 +51,34 @@ pub fn create_silent_command(program: &str) -> std::process::Command {
 /// Create an asynchronous Tokio Command with hidden console window on Windows
 pub fn create_silent_tokio_command(program: &str) -> tokio::process::Command {
     #[allow(unused_mut)]
-    let mut cmd = tokio::process::Command::new(program);
+    let resolved_program = resolve_windows_program(program);
+    let mut cmd = tokio::process::Command::new(resolved_program);
     #[cfg(target_os = "windows")]
     {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
     cmd
+}
+
+/// Resolve commands that are normally available from System32 but may be
+/// missing from a GUI process' inherited PATH (notably PowerShell on Windows).
+fn resolve_windows_program(program: &str) -> String {
+    #[cfg(target_os = "windows")]
+    {
+        if program.eq_ignore_ascii_case("powershell") || program.eq_ignore_ascii_case("powershell.exe") {
+            if let Ok(root) = env::var("SystemRoot") {
+                let candidate = PathBuf::from(root)
+                    .join("System32")
+                    .join("WindowsPowerShell")
+                    .join("v1.0")
+                    .join("powershell.exe");
+                if candidate.is_file() {
+                    return candidate.to_string_lossy().into_owned();
+                }
+            }
+        }
+    }
+    program.to_string()
 }
 
 /// Fix and augment the PATH environment variable for GUI apps on macOS / Windows / Linux
@@ -65,6 +118,7 @@ pub fn fix_system_path() {
             data_local.join("Programs/Python/Python312"),
             data_local.join("Programs/Python/Python311"),
             data_local.join("Microsoft/WinGet/Links"),
+            data_local.join("Microsoft/WindowsApps"),
         ];
         for wp in win_user_paths {
             if wp.exists() && !paths.contains(&wp) {
@@ -168,6 +222,18 @@ pub fn find_mise_binary() -> Option<PathBuf> {
     }
 
     None
+}
+
+/// Check for command shims such as Scoop's `.cmd`/`.ps1` files.
+pub fn command_available(name: &str) -> bool {
+    let Ok(path) = env::var("PATH") else { return false; };
+    for dir in env::split_paths(&path) {
+        if dir.join(name).is_file() { return true; }
+        for suffix in [".exe", ".cmd", ".bat", ".ps1"] {
+            if dir.join(format!("{}{}", name, suffix)).is_file() { return true; }
+        }
+    }
+    false
 }
 
 mod which {

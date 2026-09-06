@@ -586,6 +586,14 @@ const MainDashboard: React.FC = () => {
         progress={installModalState.progress}
         status={installModalState.status}
         onClose={() => setInstallModalState((prev) => ({ ...prev, isOpen: false }))}
+        onCancel={async () => {
+          const stopped = await api.cancelCurrentInstall();
+          setInstallModalState((prev) => ({
+            ...prev,
+            status: 'failed',
+            logs: [...prev.logs, stopped ? '[cancel] 安装已由用户终止' : '[cancel] 未发现仍在运行的安装进程'],
+          }));
+        }}
         onSetGlobal={() => {
           handleSetGlobalVersion(installModalState.toolId, installModalState.version);
         }}
