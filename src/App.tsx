@@ -11,6 +11,7 @@ import { InstallModal } from './components/InstallModal';
 import { UpdateModal } from './components/UpdateModal';
 import { ConfirmModal } from './components/ConfirmModal';
 import { ExportModal } from './components/ExportModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider, useToast } from './components/Toast';
 import { api, isTauri } from './services/tauri';
 import { checkForUpdates, UpdateInfo, CURRENT_APP_VERSION } from './services/updater';
@@ -627,9 +628,11 @@ const MainDashboard: React.FC = () => {
 
 export const App: React.FC = () => {
   return (
-    <ToastProvider>
-      <MainDashboard />
-    </ToastProvider>
+    <ErrorBoundary>
+      <ToastProvider>
+        <MainDashboard />
+      </ToastProvider>
+    </ErrorBoundary>
   );
 };
 

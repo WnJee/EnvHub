@@ -37,6 +37,8 @@ export const InstallModal: React.FC<InstallModalProps> = ({
 }) => {
   const terminalEndRef = useRef<HTMLDivElement>(null);
   const toast = useToast();
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [isCanceling, setIsCanceling] = useState(false);
 
   useEffect(() => {
     if (terminalEndRef.current) {
@@ -44,10 +46,14 @@ export const InstallModal: React.FC<InstallModalProps> = ({
     }
   }, [logs]);
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    if (!isOpen) {
+      setShowCancelConfirm(false);
+      setIsCanceling(false);
+    }
+  }, [isOpen]);
 
-  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
-  const [isCanceling, setIsCanceling] = useState(false);
+  if (!isOpen) return null;
 
   const copyLogs = () => {
     navigator.clipboard.writeText(logs.join('\n'));
