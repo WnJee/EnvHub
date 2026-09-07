@@ -7,6 +7,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::process::Stdio;
 use tauri::{AppHandle, Emitter};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use crate::env_helper;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

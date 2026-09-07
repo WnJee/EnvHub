@@ -38,8 +38,8 @@ pub fn cancel_active_install() -> Result<bool, String> {
 
 /// Create a synchronous Command with hidden console window on Windows
 pub fn create_silent_command(program: &str) -> std::process::Command {
-    #[allow(unused_mut)]
     let resolved_program = resolve_windows_program(program);
+    #[allow(unused_mut)]
     let mut cmd = std::process::Command::new(resolved_program);
     #[cfg(target_os = "windows")]
     {
@@ -50,8 +50,8 @@ pub fn create_silent_command(program: &str) -> std::process::Command {
 
 /// Create an asynchronous Tokio Command with hidden console window on Windows
 pub fn create_silent_tokio_command(program: &str) -> tokio::process::Command {
-    #[allow(unused_mut)]
     let resolved_program = resolve_windows_program(program);
+    #[allow(unused_mut)]
     let mut cmd = tokio::process::Command::new(resolved_program);
     #[cfg(target_os = "windows")]
     {
