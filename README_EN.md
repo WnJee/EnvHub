@@ -30,7 +30,7 @@ Unlike resource-heavy Electron apps, EnvHub achieves **minimal resource footprin
 
 ## ✨ Features
 
-- 🚀 **Full-Stack Runtime Version Management**: Easily install, coexist, and switch versions for Node.js, Python, Go, Rust, Java (OpenJDK/Temurin), Bun, Deno, Ruby, PHP, and more.
+- 🚀 **Full-Stack Runtime Version Management**: Easily install, coexist, and switch versions for Node.js, Python, Go, Rust, Java, Bun, Deno, Ruby, PHP, and more.
 - 📦 **Project-Level Environment Isolation**: Automatically detect and manage `.mise.toml`, `.tool-versions`, or `package.json` in project directories for zero-friction version switching on `cd`.
 - ⚡ **Mirror Acceleration & Latency Benchmarks**: Built-in mirror sources for NPM, Python Pip, Go Modules (GOPROXY), Cargo (Rust Crates), and Homebrew with real-time ping testing and 1-click configuration persistence.
 - 🛠️ **System Developer Toolbox**: Unified abstraction over platform package managers (`brew` on macOS, `winget` on Windows, `apt/pacman` on Linux) to install Git, Docker CLI, CMake, Neovim, etc.

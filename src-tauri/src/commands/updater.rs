@@ -254,7 +254,10 @@ pub async fn download_and_install_update(
     let status = child.wait().await.map_err(|e| format!("等待下载完成失败: {}", e))?;
     env_helper::clear_active_install_pid(child_pid);
     if !status.success() {
-        return Err(format!("下载失败，请检查网络或在浏览器中下载，退出码: {:?}", status.code()));
+        if target_file.exists() {
+            let _ = std::fs::remove_file(&target_file);
+        }
+        return Err(format!("下载失败或已被用户终止，退出码: {:?}", status.code()));
     }
 
     let _ = app.emit("update-download-progress", 92);

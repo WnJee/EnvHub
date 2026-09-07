@@ -32,7 +32,7 @@ EnvHub 实现了**极低资源占用（常驻内存 ~30-50MB，安装包 ~10MB�
 
 ## ✨ 核心特性
 
-- 🚀 **全语言生态运行时管理**：支持 Node.js、Python、Go、Rust、Java (OpenJDK/Temurin)、Bun、Deno、Ruby、PHP 等语言的多版本下载、共存与一键切换。
+- 🚀 **全语言生态运行时管理**：支持 Node.js、Python、Go、Rust、Java、Bun、Deno、Ruby、PHP 等语言的多版本下载、共存与一键切换。
 - 📦 **项目级环境精准隔离**：自动识别并维护项目根目录下的 `.mise.toml`、`.tool-versions` 或 `package.json`，进入目录即刻生效，无需污染全局系统。
 - ⚡ **国内高速镜像源测速与切换**：内置 NPM (淘宝/腾讯)、Python Pip (清华/阿里/豆瓣)、Go Modules (Goproxy.cn)、Cargo (字节 rsproxy/中科大)、Homebrew 等国内 CDN 镜像源，支持实时节点测速并一键写入系统配置。
 - 🛠️ **系统工具箱与跨平台包管理**：抽象统一接口，macOS 路由至 `brew`，Windows 路由至 `winget`，Linux 路由至 `apt/pacman`，一键安装 Git、Docker CLI、CMake、Neovim 等。

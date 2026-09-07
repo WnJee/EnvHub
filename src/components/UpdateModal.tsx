@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   Sparkles, 
   Download, 
@@ -15,7 +15,8 @@ import {
   ArrowRight,
   Apple,
   Monitor,
-  Terminal
+  Terminal,
+  AlertTriangle
 } from 'lucide-react';
 import { UpdateInfo } from '../services/updater';
 import { api } from '../services/tauri';
@@ -193,7 +194,16 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   const [progress, setProgress] = useState<number>(0);
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [isRelaunching, setIsRelaunching] = useState<boolean>(false);
+  const [showCancelConfirm, setShowCancelConfirm] = useState<boolean>(false);
+  const [isCanceling, setIsCanceling] = useState<boolean>(false);
   const cancelledRef = useRef(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setShowCancelConfirm(false);
+      setIsCanceling(false);
+    }
+  }, [isOpen]);
 
   if (!isOpen || !updateInfo || !updateInfo.hasUpdate) return null;
 
@@ -246,15 +256,30 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
     }
   };
 
-  const handleCloseModal = async () => {
+  const handleCloseModal = () => {
     if (downloadStatus === 'downloading') {
-      if (!window.confirm('更新仍在下载，确定要强制终止并关闭吗？')) return;
-      cancelledRef.current = true;
-      await api.cancelCurrentInstall();
+      setShowCancelConfirm(true);
+      return;
     }
     setDownloadStatus('idle');
     setProgress(0);
     onClose();
+  };
+
+  const handleConfirmCancel = async () => {
+    setIsCanceling(true);
+    cancelledRef.current = true;
+    try {
+      await api.cancelCurrentInstall();
+    } catch (err) {
+      console.error('Cancel update install error:', err);
+    } finally {
+      setIsCanceling(false);
+      setShowCancelConfirm(false);
+      setDownloadStatus('idle');
+      setProgress(0);
+      onClose();
+    }
   };
 
   // Detect platform chip
@@ -271,7 +296,51 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-2xl bg-[#0C1222] border border-slate-700/80 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh] animate-in zoom-in-95 duration-150">
+      <div className="w-full max-w-2xl bg-[#0C1222] border border-slate-700/80 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh] animate-in zoom-in-95 duration-150 relative">
+        {/* Secondary Cancellation Confirm Overlay */}
+        {showCancelConfirm && (
+          <div className="absolute inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in zoom-in-95 duration-150">
+            <div className="max-w-md w-full bg-[#0C1222] border border-slate-700/90 rounded-2xl p-5 shadow-2xl space-y-4">
+              <div className="flex items-start gap-3.5">
+                <div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-400 shrink-0 mt-0.5">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-white">确定要终止更新吗？</h4>
+                  <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                    当前正在下载 <span className="text-cyan-300 font-mono font-semibold">EnvHub v{updateInfo.latestVersion}</span> 安装程序。终止后将立即中断下载并清理临时缓存文件。
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowCancelConfirm(false)}
+                  disabled={isCanceling}
+                  className="px-4 py-2 rounded-xl text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 hover:text-white transition-colors"
+                >
+                  继续更新
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmCancel}
+                  disabled={isCanceling}
+                  className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 transition-colors flex items-center gap-1.5 shadow-lg shadow-rose-600/20 disabled:opacity-50"
+                >
+                  {isCanceling ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>正在终止...</span>
+                    </>
+                  ) : (
+                    <span>确认终止</span>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         
         {/* Header with gradient badge */}
         <div className="p-5 sm:p-6 border-b border-slate-800/90 bg-gradient-to-r from-blue-950/50 via-indigo-950/30 to-slate-900 flex items-center justify-between shrink-0 relative overflow-hidden">

@@ -42,21 +42,9 @@ export const filterLatestMinorVersions = (versions: string[], toolId?: string): 
     if (!trimmed) continue;
 
     let clean = trimmed.replace(/^v/, '');
-    if (toolId === 'python' || toolId === 'ruby') {
-      // Official pure numeric versions only (e.g. 3.13.2, 3.4.2)
+    if (toolId === 'python' || toolId === 'ruby' || toolId === 'java') {
+      // Official pure numeric versions only (e.g. 3.13.2, 3.4.2, 21.0.2)
       if (!/^\d+\.\d+(\.\d+)*$/.test(clean)) continue;
-    } else if (toolId === 'java') {
-      // Clean numeric version or extract from temurin/openjdk
-      if (clean.startsWith('temurin-') || clean.startsWith('openjdk-')) {
-        const m = clean.match(/^(?:temurin|openjdk)-(?:jre-)?(\d+(\.\d+)+)/);
-        if (m) {
-          clean = m[1];
-        } else {
-          continue;
-        }
-      } else if (!/^\d+(\.\d+)+$/.test(clean)) {
-        continue;
-      }
     } else {
       // General tools: must start with digit semver
       if (!/^\d+(\.\d+)+/.test(clean)) continue;
@@ -170,7 +158,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
       case 'rust':
         return '1.85.0 / 1.84.1';
       case 'java':
-        return '21.0.6 / 17.0.14';
+        return '21.0.2 / 17.0.2';
       case 'ruby':
         return '3.4.2 / 3.3.7';
       case 'bun':
@@ -198,7 +186,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
       case 'rust':
         return '例如: 1.85.0';
       case 'java':
-        return '例如: 21.0.6';
+        return '例如: 21.0.2';
       case 'ruby':
         return '例如: 3.4.2';
       default:

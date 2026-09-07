@@ -85,9 +85,9 @@ const SUPPORTED_TOOLS: &[ToolMeta] = &[
     },
     ToolMeta {
         id: "java",
-        name: "Java (OpenJDK)",
+        name: "Java",
         category: "runtime",
-        description: "跨平台企业级语言 (Temurin / Adoptium)",
+        description: "跨平台企业级编程语言与通用运行环境",
         icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/java/java-original.svg",
         official_site: "https://adoptium.net",
         exec_name: "java",
@@ -623,7 +623,8 @@ fn get_fallback_curated_versions(tool_id: &str) -> Vec<String> {
             "1.81.0".into(), "1.80.1".into(),
         ],
         "java" => vec![
-            "21.0.6".into(), "17.0.14".into(), "11.0.26".into(), "8.0.442".into(),
+            "25.0.2".into(), "24.0.2".into(), "23.0.2".into(), "22.0.2".into(),
+            "21.0.2".into(), "20.0.2".into(), "19.0.1".into(), "18.0.2".into(), "17.0.2".into(),
         ],
         "ruby" => vec![
             "3.4.2".into(), "3.3.7".into(), "3.2.7".into(), "3.1.6".into(),
@@ -700,26 +701,12 @@ fn filter_latest_minor_versions(tool_id: &str, versions: Vec<String>) -> Vec<Str
                 }
             }
             "java" => {
-                // Official OpenJDK / Temurin clean versions (e.g. 21.0.2, 17.0.14, 11.0.26, 8.0.442)
-                let s = if let Some(stripped) = trimmed.strip_prefix("temurin-") {
-                    stripped.strip_prefix("jre-").unwrap_or(stripped)
-                } else if let Some(stripped) = trimmed.strip_prefix("openjdk-") {
-                    stripped.strip_prefix("jre-").unwrap_or(stripped)
-                } else if trimmed.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
-                    trimmed
+                // Official clean numeric versions (e.g. 25.0.2, 21.0.2, 17.0.2) from ls-remote
+                let s = trimmed.trim_start_matches('v');
+                if s.chars().all(|c| c.is_ascii_digit() || c == '.') && s.contains('.') {
+                    Some(s.to_string())
                 } else {
-                    ""
-                };
-
-                if s.is_empty() {
                     None
-                } else {
-                    let base = s.split('+').next().unwrap_or(s);
-                    if base.chars().all(|c| c.is_ascii_digit() || c == '.') && base.contains('.') {
-                        Some(base.to_string())
-                    } else {
-                        None
-                    }
                 }
             }
             _ => {
@@ -798,16 +785,26 @@ pub async fn get_remote_versions(tool_id: String) -> Result<Vec<String>, String>
 pub async fn set_global_version(tool_id: String, version: String) -> Result<bool, String> {
     env_helper::fix_system_path();
     if let Some(bin) = env_helper::find_mise_binary() {
-        let target = format!("{}@{}", tool_id, version);
-        let status = env_helper::create_silent_tokio_command(&bin.to_string_lossy())
-            .current_dir(mise_working_dir())
-            .args(["use", "-g", &target])
-            .status()
-            .await
-            .map_err(|e| format!("无法执行 mise use: {}", e))?;
+        let targets = if tool_id == "java" && !version.starts_with("temurin-") {
+            vec![
+                format!("{}@{}", tool_id, version),
+                format!("{}@temurin-{}", tool_id, version),
+            ]
+        } else {
+            vec![format!("{}@{}", tool_id, version)]
+        };
 
-        if status.success() {
-            return Ok(true);
+        for target in targets {
+            if let Ok(status) = env_helper::create_silent_tokio_command(&bin.to_string_lossy())
+                .current_dir(mise_working_dir())
+                .args(["use", "-g", &target])
+                .status()
+                .await
+            {
+                if status.success() {
+                    return Ok(true);
+                }
+            }
         }
     }
 
@@ -824,6 +821,8 @@ pub async fn uninstall_runtime_version(tool_id: String, version: String) -> Resu
         let targets = [
             format!("{}@{}", tool_id, clean_ver),
             format!("{}@{}", tool_id, version),
+            format!("{}@temurin-{}", tool_id, clean_ver),
+            format!("{}@temurin-{}", tool_id, version),
         ];
         for target in targets {
             let _ = env_helper::create_silent_tokio_command(&bin.to_string_lossy())
@@ -840,6 +839,8 @@ pub async fn uninstall_runtime_version(tool_id: String, version: String) -> Resu
             base_dir.join(&tool_id).join(&clean_ver),
             base_dir.join(&tool_id).join(&version),
             base_dir.join(&tool_id).join(format!("v{}", clean_ver)),
+            base_dir.join(&tool_id).join(format!("temurin-{}", clean_ver)),
+            base_dir.join(&tool_id).join(format!("temurin-{}", version)),
         ];
         for d in install_candidates {
             if d.exists() {
@@ -885,7 +886,29 @@ pub async fn install_runtime_version(
         }
     };
 
-    let target = format!("{}@{}", tool_id, version);
+    let target = if tool_id == "java" {
+        let v_trim = version.trim();
+        if v_trim.starts_with("temurin-") || v_trim.starts_with("openjdk-") || v_trim.starts_with("zulu-") || v_trim.starts_with("corretto-") {
+            format!("{}@{}", tool_id, v_trim)
+        } else {
+            // Core OpenJDK GA releases directly recognized by Mise core:java
+            let core_java_versions = [
+                "27.0.0", "26.0.2.1", "26.0.2", "26.0.1", "26.0.0", "25.0.2", "25.0.1", "25.0.0",
+                "24.0.2", "24.0.1", "24.0.0", "23.0.2", "23.0.1", "23.0.0", "22.0.2",
+                "22.0.1", "22.0.0", "21.0.2", "21.0.1", "21.0.0", "20.0.2", "20.0.1",
+                "20.0.0", "19.0.1", "19.0.0", "18.0.2", "18.0.1.1", "18.0.0", "17.0.2", "17.0.1", "17.0.0"
+            ];
+            if core_java_versions.contains(&v_trim) {
+                format!("{}@{}", tool_id, v_trim)
+            } else {
+                // If it's a version not in core:java (e.g. 21.0.12, 17.0.14, 11, 8, etc.),
+                // automatically route to Temurin which provides full LTS builds and metadata
+                format!("{}@temurin-{}", tool_id, v_trim)
+            }
+        }
+    } else {
+        format!("{}@{}", tool_id, version)
+    };
     let _ = app.emit("install-log", format!("> {} install {}", mise_bin.display(), target));
     let _ = app.emit("install-progress", 10);
 
