@@ -767,6 +767,9 @@ pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool
             .spawn()
             .map_err(|e| format!("调用 Homebrew 失败: {}", e))?;
 
+        let child_pid = child.id();
+        env_helper::set_active_install_pid(child_pid);
+
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
@@ -793,6 +796,7 @@ pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool
         }
 
         let status = child.wait().await.map_err(|e| format!("等待 Homebrew 完成失败: {}", e))?;
+        env_helper::clear_active_install_pid(child_pid);
         if !status.success() {
             let _ = app.emit("install-log", format!("❌ Homebrew 安装失败，退出码: {:?}", status.code()));
             return Err(format!("Homebrew 执行失败，退出码: {:?}", status.code()));
@@ -817,6 +821,9 @@ pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("调用安装工具失败: {}", e))?;
+
+        let child_pid = child.id();
+        env_helper::set_active_install_pid(child_pid);
 
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
@@ -844,6 +851,7 @@ pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool
         }
 
         let status = child.wait().await.map_err(|e| format!("等待完成失败: {}", e))?;
+        env_helper::clear_active_install_pid(child_pid);
         if !status.success() {
             let _ = app.emit("install-log", format!("❌ 安装失败，退出码: {:?}", status.code()));
             return Err(format!("安装执行失败，退出码: {:?}", status.code()));

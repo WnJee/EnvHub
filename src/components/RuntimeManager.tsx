@@ -34,44 +34,63 @@ export const formatVersion = (v: string | undefined | null): string => {
   return trimmed.startsWith('v') ? trimmed : `v${trimmed}`;
 };
 
-export const filterLatestMinorVersions = (versions: string[]): string[] => {
+export const filterLatestMinorVersions = (versions: string[], toolId?: string): string[] => {
   const groups = new Map<string, { patch: number; raw: string; isPrerelease: boolean }>();
-  const nonSemver: string[] = [];
 
   for (const v of versions) {
-    const trimmed = v.trim().replace(/^v/, '');
-    const parts = trimmed.split('.');
+    const trimmed = v.trim();
+    if (!trimmed) continue;
+
+    let clean = trimmed.replace(/^v/, '');
+    if (toolId === 'python' || toolId === 'ruby') {
+      // Official pure numeric versions only (e.g. 3.13.2, 3.4.2)
+      if (!/^\d+\.\d+(\.\d+)*$/.test(clean)) continue;
+    } else if (toolId === 'java') {
+      // Clean numeric version or extract from temurin/openjdk
+      if (clean.startsWith('temurin-') || clean.startsWith('openjdk-')) {
+        const m = clean.match(/^(?:temurin|openjdk)-(?:jre-)?(\d+(\.\d+)+)/);
+        if (m) {
+          clean = m[1];
+        } else {
+          continue;
+        }
+      } else if (!/^\d+(\.\d+)+$/.test(clean)) {
+        continue;
+      }
+    } else {
+      // General tools: must start with digit semver
+      if (!/^\d+(\.\d+)+/.test(clean)) continue;
+    }
+
+    const base = clean.split('-')[0].split('+')[0];
+    const parts = base.split('.');
     if (parts.length >= 2) {
       const maj = parseInt(parts[0], 10);
       const min = parseInt(parts[1], 10);
       if (!isNaN(maj) && !isNaN(min)) {
         const key = `${maj}.${min}`;
         const rawPatch = parts[2] || '0';
-        const isPrerelease = rawPatch.includes('-') || rawPatch.includes('rc') || rawPatch.includes('beta') || rawPatch.includes('alpha');
+        const isPrerelease = clean.includes('-') || clean.includes('rc') || clean.includes('beta') || clean.includes('alpha');
         const match = rawPatch.match(/^\d+/);
         const patchNum = match ? parseInt(match[0], 10) : 0;
 
         const existing = groups.get(key);
         if (!existing) {
-          groups.set(key, { patch: patchNum, raw: v, isPrerelease });
+          groups.set(key, { patch: patchNum, raw: base, isPrerelease });
         } else {
           if (existing.isPrerelease && !isPrerelease) {
-            groups.set(key, { patch: patchNum, raw: v, isPrerelease });
+            groups.set(key, { patch: patchNum, raw: base, isPrerelease });
           } else if (!isPrerelease && !existing.isPrerelease) {
-            if (patchNum > existing.patch) {
-              groups.set(key, { patch: patchNum, raw: v, isPrerelease });
+            if (patchNum >= existing.patch) {
+              groups.set(key, { patch: patchNum, raw: base, isPrerelease });
             }
           } else if (isPrerelease && existing.isPrerelease) {
-            if (patchNum > existing.patch) {
-              groups.set(key, { patch: patchNum, raw: v, isPrerelease });
+            if (patchNum >= existing.patch) {
+              groups.set(key, { patch: patchNum, raw: base, isPrerelease });
             }
           }
         }
-        continue;
       }
-    }
-    if (!nonSemver.includes(v)) {
-      nonSemver.push(v);
     }
   }
 
@@ -87,7 +106,7 @@ export const filterLatestMinorVersions = (versions: string[]): string[] => {
     })
     .map((item) => item.raw);
 
-  return [...sorted, ...nonSemver];
+  return sorted;
 };
 
 export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
@@ -188,7 +207,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
   };
 
   // Filter and deduplicate remote versions to only highest patch per minor release
-  const curatedVersions = filterLatestMinorVersions(currentTool.availableVersions || []);
+  const curatedVersions = filterLatestMinorVersions(currentTool.availableVersions || [], currentTool.id);
   const availableVersionsFiltered = curatedVersions.filter((v) => {
     if (remoteSearch && !v.toLowerCase().includes(remoteSearch.toLowerCase())) {
       return false;
@@ -197,7 +216,17 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
       return currentTool.installedVersions.includes(v);
     }
     if (versionFilter === 'lts') {
-      return v.includes('20.') || v.includes('18.') || v.includes('21.') || v.includes('3.12') || v.includes('temurin-21') || v.includes('lts');
+      return (
+        v.startsWith('21.') ||
+        v.startsWith('17.') ||
+        v.startsWith('11.') ||
+        v.startsWith('8.') ||
+        v.startsWith('20.') ||
+        v.startsWith('22.') ||
+        v.startsWith('3.12') ||
+        v.startsWith('3.10') ||
+        v.includes('lts')
+      );
     }
     return true;
   });

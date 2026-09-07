@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   Terminal, 
   CheckCircle2, 
@@ -7,7 +7,8 @@ import {
   X, 
   Loader2,
   Zap,
-  ArrowDownCircle
+  ArrowDownCircle,
+  AlertTriangle
 } from 'lucide-react';
 import { useToast } from './Toast';
 
@@ -45,17 +46,33 @@ export const InstallModal: React.FC<InstallModalProps> = ({
 
   if (!isOpen) return null;
 
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+  const [isCanceling, setIsCanceling] = useState(false);
+
   const copyLogs = () => {
     navigator.clipboard.writeText(logs.join('\n'));
     toast.success('已复制安装日志到剪贴板');
   };
 
-  const handleClose = async () => {
+  const handleClose = () => {
     if (status === 'running') {
-      if (!window.confirm('安装仍在进行，确定要强制终止并关闭吗？')) return;
-      await onCancel();
+      setShowCancelConfirm(true);
+      return;
     }
     onClose();
+  };
+
+  const handleConfirmCancel = async () => {
+    setIsCanceling(true);
+    try {
+      await onCancel();
+    } catch (err) {
+      console.error('终止安装失败:', err);
+    } finally {
+      setIsCanceling(false);
+      setShowCancelConfirm(false);
+      onClose();
+    }
   };
 
   const getStageText = () => {
@@ -69,7 +86,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-200">
-      <div className="w-full max-w-2xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-150">
+      <div className="relative w-full max-w-2xl bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-150">
         {/* Header */}
         <div className="p-4 border-b border-slate-800 bg-[#0B1120] flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -210,12 +227,63 @@ export const InstallModal: React.FC<InstallModalProps> = ({
             )}
             <button
               onClick={handleClose}
-              className={`px-4 py-1.5 rounded-xl text-xs font-medium transition-colors ${status === 'running' ? 'bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30' : 'bg-slate-800 hover:bg-slate-700 text-slate-200'}`}
+              disabled={isCanceling}
+              className={`px-4 py-1.5 rounded-xl text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                status === 'running'
+                  ? 'bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 disabled:opacity-50'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+              }`}
             >
-              {status === 'running' ? '终止并关闭' : status === 'completed' ? '完成' : '关闭'}
+              {isCanceling && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {isCanceling
+                ? '正在终止...'
+                : status === 'running'
+                ? '终止并关闭'
+                : status === 'completed'
+                ? '完成'
+                : '关闭'}
             </button>
           </div>
         </div>
+
+        {/* Secondary Confirm Dialog */}
+        {showCancelConfirm && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm animate-in fade-in duration-150">
+            <div className="bg-slate-900 border border-slate-700/90 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+              <div className="flex items-start gap-3.5">
+                <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-white">确认终止安装？</h4>
+                  <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+                    当前正在部署 {toolId} v{version}，强制终止将中断后台正在运行的安装任务。确定要终止并关闭吗？
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  disabled={isCanceling}
+                  onClick={() => setShowCancelConfirm(false)}
+                  className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors disabled:opacity-50"
+                >
+                  继续安装
+                </button>
+                <button
+                  type="button"
+                  disabled={isCanceling}
+                  onClick={handleConfirmCancel}
+                  className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shadow-md shadow-rose-600/20 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {isCanceling && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {isCanceling ? '正在终止...' : '确认终止'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

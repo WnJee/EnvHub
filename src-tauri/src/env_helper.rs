@@ -27,9 +27,14 @@ pub fn cancel_active_install() -> Result<bool, String> {
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .status();
     #[cfg(not(target_os = "windows"))]
-    let status = std::process::Command::new("kill")
-        .args(["-TERM", &pid.to_string()])
-        .status();
+    let status = {
+        let _ = std::process::Command::new("pkill")
+            .args(["-9", "-P", &pid.to_string()])
+            .status();
+        std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .status()
+    };
 
     status
         .map(|status| status.success())

@@ -519,7 +519,7 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
                         .map(|l| l.trim().to_string())
                         .filter(|l| !l.is_empty())
                         .collect();
-                    let curated: Vec<String> = filter_latest_minor_versions(raw_list)
+                    let curated: Vec<String> = filter_latest_minor_versions(meta.id, raw_list)
                         .into_iter()
                         .take(25)
                         .collect();
@@ -668,65 +668,107 @@ fn get_fallback_curated_versions(tool_id: &str) -> Vec<String> {
     }
 }
 
-/// Filters version list to only keep the latest patch version for each major.minor series
-/// e.g. ["25.8.0", "25.8.1", "25.8.2", "25.9.0"] -> ["25.9.0", "25.8.2"]
-fn filter_latest_minor_versions(versions: Vec<String>) -> Vec<String> {
+/// Filters version list to only keep the latest patch version for each major.minor series,
+/// filtering out third-party distributions (like anaconda, jruby, graalvm) and non-semver strings.
+fn filter_latest_minor_versions(tool_id: &str, versions: Vec<String>) -> Vec<String> {
     use std::collections::BTreeMap;
-    let mut groups: BTreeMap<(u64, u64), (u64, bool, String)> = BTreeMap::new();
-    let mut non_semver: Vec<String> = Vec::new();
+    let mut groups: BTreeMap<(u64, u64), (u64, String)> = BTreeMap::new();
 
     for v in versions {
-        let trimmed = v.trim().trim_start_matches('v');
-        // Several mise backends prefix versions with a distribution name
-        // (for example `temurin-21.0.6` or `corretto-jre-17.0.12`). Parse
-        // the first numeric component rather than treating those entries as
-        // opaque strings, otherwise the Windows UI only shows old releases.
-        let version_start = trimmed.find(|c: char| c.is_ascii_digit());
-        let numeric_version = version_start.map(|index| &trimmed[index..]).unwrap_or(trimmed);
-        let parts: Vec<&str> = numeric_version.split('.').collect();
-        if parts.len() >= 2 {
-            let major = parts[0].parse::<u64>();
-            let minor = parts[1].parse::<u64>();
-            let (patch, is_prerelease) = if parts.len() >= 3 {
-                let p_raw = parts[2];
-                let is_pre = p_raw.contains('-') || p_raw.contains("rc") || p_raw.contains("beta") || p_raw.contains("alpha");
-                let patch_num: u64 = p_raw.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(0);
-                (patch_num, is_pre)
-            } else {
-                (0, false)
-            };
+        let trimmed = v.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
 
-            if let (Ok(maj), Ok(min)) = (major, minor) {
-                if let Some((existing_patch, existing_pre, _)) = groups.get(&(maj, min)) {
-                    if *existing_pre && !is_prerelease {
-                        groups.insert((maj, min), (patch, is_prerelease, v.clone()));
-                    } else if !is_prerelease && !existing_pre {
-                        if patch >= *existing_patch {
-                            groups.insert((maj, min), (patch, is_prerelease, v.clone()));
-                        }
-                    } else if is_prerelease && *existing_pre {
-                        if patch >= *existing_patch {
-                            groups.insert((maj, min), (patch, is_prerelease, v.clone()));
-                        }
+        let clean_str: Option<String> = match tool_id {
+            "python" => {
+                // Official CPython versions: e.g. 3.13.2, 3.12.9, 2.7.18
+                let s = trimmed.trim_start_matches('v');
+                if s.chars().all(|c| c.is_ascii_digit() || c == '.') && s.contains('.') {
+                    Some(s.to_string())
+                } else {
+                    None
+                }
+            }
+            "ruby" => {
+                // Official MRI Ruby versions: e.g. 3.4.2, 3.3.7, 2.7.8
+                let s = trimmed.trim_start_matches('v');
+                if s.chars().all(|c| c.is_ascii_digit() || c == '.') && s.contains('.') {
+                    Some(s.to_string())
+                } else {
+                    None
+                }
+            }
+            "java" => {
+                // Official OpenJDK / Temurin clean versions (e.g. 21.0.2, 17.0.14, 11.0.26, 8.0.442)
+                let s = if let Some(stripped) = trimmed.strip_prefix("temurin-") {
+                    stripped.strip_prefix("jre-").unwrap_or(stripped)
+                } else if let Some(stripped) = trimmed.strip_prefix("openjdk-") {
+                    stripped.strip_prefix("jre-").unwrap_or(stripped)
+                } else if trimmed.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                    trimmed
+                } else {
+                    ""
+                };
+
+                if s.is_empty() {
+                    None
+                } else {
+                    let base = s.split('+').next().unwrap_or(s);
+                    if base.chars().all(|c| c.is_ascii_digit() || c == '.') && base.contains('.') {
+                        Some(base.to_string())
+                    } else {
+                        None
+                    }
+                }
+            }
+            _ => {
+                let s = trimmed.trim_start_matches('v');
+                let base = s.split('-').next().unwrap_or(s).split('+').next().unwrap_or(s);
+                if base.chars().all(|c| c.is_ascii_digit() || c == '.') && base.contains('.') {
+                    Some(base.to_string())
+                } else {
+                    None
+                }
+            }
+        };
+
+        let Some(ver_str) = clean_str else { continue; };
+
+        let parts: Vec<&str> = ver_str.split('.').collect();
+        if parts.len() >= 2 {
+            if let (Ok(maj), Ok(min)) = (parts[0].parse::<u64>(), parts[1].parse::<u64>()) {
+                let patch = if parts.len() >= 3 {
+                    parts[2].parse::<u64>().unwrap_or(0)
+                } else {
+                    0
+                };
+
+                if let Some((existing_patch, _)) = groups.get(&(maj, min)) {
+                    if patch >= *existing_patch {
+                        groups.insert((maj, min), (patch, ver_str));
                     }
                 } else {
-                    groups.insert((maj, min), (patch, is_prerelease, v.clone()));
+                    groups.insert((maj, min), (patch, ver_str));
                 }
-                continue;
             }
-        }
-        if !non_semver.contains(&v) {
-            non_semver.push(v);
         }
     }
 
-    let mut result: Vec<String> = groups.into_iter().rev().map(|(_, (_, _, ver))| ver).collect();
-    for item in non_semver {
-        if !result.contains(&item) {
-            result.push(item);
+    // For Java, ensure essential LTS versions (21, 17, 11, 8) are always present if missing from ls-remote
+    if tool_id == "java" {
+        for fallback in get_fallback_curated_versions("java") {
+            let parts: Vec<&str> = fallback.split('.').collect();
+            if parts.len() >= 2 {
+                if let (Ok(maj), Ok(min)) = (parts[0].parse::<u64>(), parts[1].parse::<u64>()) {
+                    let patch = parts.get(2).and_then(|p| p.parse::<u64>().ok()).unwrap_or(0);
+                    groups.entry((maj, min)).or_insert((patch, fallback));
+                }
+            }
         }
     }
-    result
+
+    groups.into_iter().rev().map(|(_, (_, ver))| ver).collect()
 }
 
 #[tauri::command]
@@ -741,7 +783,7 @@ pub async fn get_remote_versions(tool_id: String) -> Result<Vec<String>, String>
                     .map(|l| l.trim().to_string())
                     .filter(|l| !l.is_empty())
                     .collect();
-                let curated: Vec<String> = filter_latest_minor_versions(raw_list)
+                let curated: Vec<String> = filter_latest_minor_versions(&tool_id, raw_list)
                     .into_iter()
                     .take(40)
                     .collect();
@@ -1047,6 +1089,9 @@ pub async fn bootstrap_mise_cli(app: AppHandle) -> Result<bool, String> {
             .spawn()
             .map_err(|e| format!("执行自举脚本失败: {}", e))?;
 
+        let child_pid = child.id();
+        env_helper::set_active_install_pid(child_pid);
+
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
@@ -1073,6 +1118,7 @@ pub async fn bootstrap_mise_cli(app: AppHandle) -> Result<bool, String> {
         }
 
         let status = child.wait().await.map_err(|e| format!("等待自举脚本完成失败: {}", e))?;
+        env_helper::clear_active_install_pid(child_pid);
         if status.success() {
             env_helper::fix_system_path();
             let _ = app.emit("install-log", "✓ Mise CLI 引擎已安装就绪！".to_string());
@@ -1140,10 +1186,27 @@ pub async fn open_terminal_for_runtime(tool_id: String, version: String) -> Resu
 
     #[cfg(target_os = "macos")]
     {
-        let script = format!("echo '=== EnvHub 环境检测: {} {} ==='; '{}' exec '{}' -- {} {}; echo ''; exec $SHELL", tool_id, version, mise.display(), target, exec, command_args);
-        let _ = std::process::Command::new("osascript")
-            .args(["-e", &format!("tell application \"Terminal\" to do script \"{}\"", script)])
-            .status();
+        let script_content = format!(
+            "#!/bin/bash\nclear\necho '========================================'\necho '  ⚡ EnvHub 终端环境检测: {} {}'\necho '========================================'\necho ''\n'{}' exec '{}' -- {} {}\necho ''\necho '----------------------------------------'\necho '已在当前版本环境中执行完毕，当前终端会话保持就绪：'\nexec $SHELL -l\n",
+            tool_id, version, mise.display(), target, exec, command_args
+        );
+        let temp_dir = std::env::temp_dir();
+        let script_path = temp_dir.join(format!("envhub_check_{}.command", tool_id));
+        if std::fs::write(&script_path, script_content).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
+            }
+            let status = std::process::Command::new("open")
+                .args(["-a", "Terminal", script_path.to_str().unwrap_or("")])
+                .status();
+            if status.is_err() || !status.as_ref().unwrap().success() {
+                let _ = std::process::Command::new("open")
+                    .arg(&script_path)
+                    .status();
+            }
+        }
     }
 
     #[cfg(target_os = "windows")]
