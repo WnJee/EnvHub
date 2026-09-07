@@ -411,24 +411,51 @@ Write-EnvWarn "请重启当前 PowerShell 窗口以使全局命令与 Shims 路�
 
 /**
  * Generate Windows Batch Wrapper Script (setup_envhub.bat)
+ * Embeds the complete PowerShell installer and automatically generates setup_envhub.ps1 if missing
  */
-export function generateWindowsBatchScript(): string {
+export function generateWindowsBatchScript(
+  tools: ExportToolItem[],
+  options: ExportScriptOptions
+): string {
+  const ps1Content = generateWindowsPowerShellScript(tools, options);
+
   return `@echo off
 chcp 65001 > nul
 title EnvHub - Windows 自动化环境部署
+setlocal EnableDelayedExpansion
+
 echo ==============================================================================
-echo  EnvHub 环境一键部署启动器
+echo  EnvHub 环境一键部署启动器 (批处理自执行)
 echo ==============================================================================
-echo 正在以 Bypass 权限启动 PowerShell 安装脚本...
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup_envhub.ps1"
+set "PS1_FILE=%~dp0setup_envhub.ps1"
+
+rem 检查同级目录下是否存在 setup_envhub.ps1，若不存在则自动从内置脚本提取生成
+if not exist "%PS1_FILE%" (
+    echo [*] 检测到 setup_envhub.ps1 不存在，正在自动提取并生成配套脚本...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$raw = [System.IO.File]::ReadAllText('%~f0', [System.Text.Encoding]::UTF8); $tag = '# __ENVHUB_POWERSHELL_START__'; $idx = $raw.IndexOf($tag); if ($idx -ge 0) { try { [System.IO.File]::WriteAllText('%PS1_FILE%', $raw.Substring($idx + $tag.Length).TrimStart(), [System.Text.Encoding]::UTF8); Write-Host '[OK] setup_envhub.ps1 脚本已成功生成！' -ForegroundColor Green } catch { Write-Host '[提示] 目录为只读，将直接在内存中执行内置 PowerShell 脚本。' -ForegroundColor Yellow } }"
+)
+
+if exist "%PS1_FILE%" (
+    echo [*] 正在以 Bypass 权限启动 PowerShell 安装脚本...
+    echo.
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1_FILE%"
+) else (
+    echo [*] 正在以 Bypass 权限直接执行内置 PowerShell 部署任务...
+    echo.
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$raw = [System.IO.File]::ReadAllText('%~f0', [System.Text.Encoding]::UTF8); $tag = '# __ENVHUB_POWERSHELL_START__'; $idx = $raw.IndexOf($tag); if ($idx -ge 0) { [ScriptBlock]::Create($raw.Substring($idx + $tag.Length).TrimStart()).Invoke() }"
+)
 
 echo.
 echo ==============================================================================
 echo  脚本运行结束，请按任意键退出...
 echo ==============================================================================
 pause > nul
+goto :eof
+
+# __ENVHUB_POWERSHELL_START__
+${ps1Content}
 `;
 }
 

@@ -97,7 +97,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       case 'ps1':
         return generateWindowsPowerShellScript(toolItems, opts);
       case 'bat':
-        return generateWindowsBatchScript();
+        return generateWindowsBatchScript(toolItems, opts);
       case 'toml':
         return generateMiseTomlConfig(toolItems);
       default:
