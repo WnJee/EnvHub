@@ -899,7 +899,26 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
             for p in win_profiles {
                 if p.exists() {
                     if let Ok(content) = fs::read_to_string(&p) {
-                        if content.contains("mise activate") || content.contains("rtx activate") {
+                        let modern_snippet = "$MiseShell = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell' }\n    (& mise activate $MiseShell) | Out-String | Invoke-Expression";
+                        let mut fixed = content.clone();
+                        let targets = [
+                            "(& mise activate ps1) | Out-String | Invoke-Expression",
+                            "(& $MiseCommand.Source activate ps1) | Out-String | Invoke-Expression",
+                            "(& mise activate powershell) | Out-String | Invoke-Expression",
+                            "(& $MiseCommand.Source activate powershell) | Out-String | Invoke-Expression",
+                        ];
+                        for t in targets {
+                            if fixed.contains(t) {
+                                fixed = fixed.replace(t, modern_snippet);
+                            }
+                        }
+                        if fixed.contains("activate ps1") {
+                            fixed = fixed.replace("activate ps1", "activate powershell");
+                        }
+                        if fixed != content {
+                            let _ = fs::write(&p, &fixed);
+                        }
+                        if fixed.contains("mise activate") || fixed.contains("rtx activate") {
                             has_activation = true;
                             rc_file = p.file_name().and_then(|n| n.to_str()).unwrap_or("Microsoft.PowerShell_profile.ps1").to_string();
                             break;
@@ -1056,19 +1075,41 @@ pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
     if let Some(home) = dirs::home_dir() {
         #[cfg(target_os = "windows")]
         {
-            // 1. Write to PowerShell profile
-            let hook = "\n# Mise Version Manager Hook\nif (Get-Command mise -ErrorAction SilentlyContinue) {\n    (& mise activate ps1) | Out-String | Invoke-Expression\n}\n";
+            // 1. Write to PowerShell profile (supporting both standard Documents and OneDrive paths, compatible with both Windows PowerShell 5.1 & pwsh 7+)
+            let hook = "\n# Mise Version Manager Hook\n$MiseBin = if (Get-Command mise -ErrorAction SilentlyContinue) { 'mise' } elseif (Test-Path \"$env:LOCALAPPDATA\\mise\\bin\\mise.exe\") { \"$env:LOCALAPPDATA\\mise\\bin\\mise.exe\" } else { $null }\nif ($MiseBin) {\n    $MiseShell = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell' }\n    (& $MiseBin activate $MiseShell) | Out-String | Invoke-Expression\n}\n";
             
             let profile_dirs = [
                 home.join("Documents/WindowsPowerShell"),
                 home.join("Documents/PowerShell"),
+                home.join("OneDrive/Documents/WindowsPowerShell"),
+                home.join("OneDrive/Documents/PowerShell"),
+            ];
+
+            let modern_snippet = "$MiseShell = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell' }\n    (& mise activate $MiseShell) | Out-String | Invoke-Expression";
+            let targets = [
+                "(& mise activate ps1) | Out-String | Invoke-Expression",
+                "(& $MiseCommand.Source activate ps1) | Out-String | Invoke-Expression",
+                "(& mise activate powershell) | Out-String | Invoke-Expression",
+                "(& $MiseCommand.Source activate powershell) | Out-String | Invoke-Expression",
             ];
 
             for p_dir in profile_dirs {
-                let _ = fs::create_dir_all(&p_dir);
                 let p_file = p_dir.join("Microsoft.PowerShell_profile.ps1");
                 let existing = fs::read_to_string(&p_file).unwrap_or_default();
-                if !existing.contains("mise activate") {
+                let mut fixed = existing.clone();
+                for t in targets {
+                    if fixed.contains(t) {
+                        fixed = fixed.replace(t, modern_snippet);
+                    }
+                }
+                if fixed.contains("activate ps1") {
+                    fixed = fixed.replace("activate ps1", "activate powershell");
+                }
+
+                if fixed != existing {
+                    let _ = fs::write(&p_file, fixed);
+                } else if !existing.contains("mise activate") {
+                    let _ = fs::create_dir_all(&p_dir);
                     let _ = fs::write(&p_file, format!("{}{}", existing, hook));
                 }
             }

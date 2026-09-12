@@ -292,12 +292,34 @@ if (-not (Test-Path $ProfileDir)) {
 
 $MiseHook = @'
 # === EnvHub / Mise Activation Hook ===
-$MiseCommand = Get-Command mise -ErrorAction SilentlyContinue
-if ($MiseCommand) { (& $MiseCommand.Source activate ps1) | Out-String | Invoke-Expression }
+$MiseBin = if (Get-Command mise -ErrorAction SilentlyContinue) { 'mise' } elseif (Test-Path "$env:LOCALAPPDATA\mise\bin\mise.exe") { "$env:LOCALAPPDATA\mise\bin\mise.exe" } else { $null }
+if ($MiseBin) {
+    $MiseShell = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell' }
+    (& $MiseBin activate $MiseShell) | Out-String | Invoke-Expression
+}
 '@
 if (Test-Path $PROFILE) {
     $ExistingProfile = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
-    if ($ExistingProfile -notmatch "mise activate") {
+    $Targets = @(
+        '(& mise activate ps1) | Out-String | Invoke-Expression',
+        '(& $MiseCommand.Source activate ps1) | Out-String | Invoke-Expression',
+        '(& mise activate powershell) | Out-String | Invoke-Expression',
+        '(& $MiseCommand.Source activate powershell) | Out-String | Invoke-Expression'
+    )
+    $ModernSnippet = '$MiseShell = if ($PSVersionTable.PSEdition -eq ''Core'') { ''pwsh'' } else { ''powershell'' }; (& mise activate $MiseShell) | Out-String | Invoke-Expression'
+    $FixedProfile = $ExistingProfile
+    foreach ($T in $Targets) {
+        if ($FixedProfile.Contains($T)) {
+            $FixedProfile = $FixedProfile.Replace($T, $ModernSnippet)
+        }
+    }
+    if ($FixedProfile.Contains("activate ps1")) {
+        $FixedProfile = $FixedProfile.Replace("activate ps1", "activate powershell")
+    }
+    if ($FixedProfile -ne $ExistingProfile) {
+        Set-Content -Path $PROFILE -Value $FixedProfile -Encoding UTF8
+        Write-EnvSucc "已自动修复 Profile 中的激活命令为 PowerShell / pwsh 双版本兼容"
+    } elseif ($ExistingProfile -notmatch "mise activate") {
         Add-Content -Path $PROFILE -Value $MiseHook
         Write-EnvSucc "已注入环境变量激活代码到 $PROFILE"
     }
