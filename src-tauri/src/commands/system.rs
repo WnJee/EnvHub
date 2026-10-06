@@ -644,6 +644,127 @@ pub async fn test_system_tool(tool_id: String) -> Result<String, String> {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub fn launch_homebrew_terminal_installer() -> Result<bool, String> {
+    let script_content = r#"#!/bin/bash
+clear
+echo "========================================================"
+echo "  ⚡ EnvHub - macOS Homebrew 自动化安装与加速向导"
+echo "========================================================"
+echo ""
+
+# 1. 检查是否已经安装过 Homebrew
+if [ -x "/opt/homebrew/bin/brew" ] || [ -x "/usr/local/bin/brew" ] || command -v brew &>/dev/null; then
+    echo "✓ 检测到系统已存在 Homebrew，正在为您配置环境变量..."
+    if [ -x "/opt/homebrew/bin/brew" ]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+        if [ -f "$HOME/.zprofile" ] && ! grep -q "/opt/homebrew/bin/brew shellenv" "$HOME/.zprofile" 2>/dev/null; then
+            echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zprofile"
+        fi
+        if [ -f "$HOME/.zshrc" ] && ! grep -q "/opt/homebrew/bin/brew shellenv" "$HOME/.zshrc" 2>/dev/null; then
+            echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zshrc"
+        fi
+    elif [ -x "/usr/local/bin/brew" ]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+        if [ -f "$HOME/.zprofile" ] && ! grep -q "/usr/local/bin/brew shellenv" "$HOME/.zprofile" 2>/dev/null; then
+            echo 'eval "$(/usr/local/bin/brew shellenv)"' >> "$HOME/.zprofile"
+        fi
+        if [ -f "$HOME/.zshrc" ] && ! grep -q "/usr/local/bin/brew shellenv" "$HOME/.zshrc" 2>/dev/null; then
+            echo 'eval "$(/usr/local/bin/brew shellenv)"' >> "$HOME/.zshrc"
+        fi
+    fi
+    echo "✓ Homebrew 当前版本: $(brew --version 2>/dev/null | head -n 1 || echo '就绪')"
+    echo ""
+    echo "========================================================"
+    echo "🎉 Homebrew 环境变量已配置就绪，请返回 EnvHub 刷新即可！"
+    echo "========================================================"
+    echo ""
+    read -p "按回车键退出当前窗口..."
+    exit 0
+fi
+
+echo "正在检测网络连接状况与镜像源可用性..."
+USE_MIRROR=0
+if ! curl -Is --connect-timeout 4 https://raw.githubusercontent.com >/dev/null 2>&1; then
+    echo "⚡ 官方 GitHub 访问超时，将自动启用国内极速镜像源（中科大/清华/Gitee加速）"
+    USE_MIRROR=1
+else
+    echo "✓ GitHub 官方源网络连接正常"
+fi
+
+echo ""
+echo "--------------------------------------------------------"
+echo "提示: Homebrew 安装需要管理员权限，若出现密码提示请输入开机密码并按回车（输入时屏幕不显示密码属于正常现象）"
+echo "--------------------------------------------------------"
+echo ""
+
+if [ "$USE_MIRROR" -eq 1 ]; then
+    echo ">> 正在拉取国内一键安装脚本..."
+    /bin/zsh -c "$(curl -fsSL https://gitee.com/cunkai/HomebrewCN/raw/master/Homebrew.sh)"
+else
+    echo ">> 正在启动 Homebrew 官方安装程序..."
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+fi
+
+# 安装后处理：配置环境变量
+if [ -x "/opt/homebrew/bin/brew" ]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+    if [ -f "$HOME/.zprofile" ] && ! grep -q "/opt/homebrew/bin/brew shellenv" "$HOME/.zprofile" 2>/dev/null; then
+        echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zprofile"
+    fi
+    if [ -f "$HOME/.zshrc" ] && ! grep -q "/opt/homebrew/bin/brew shellenv" "$HOME/.zshrc" 2>/dev/null; then
+        echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zshrc"
+    fi
+elif [ -x "/usr/local/bin/brew" ]; then
+    eval "$(/usr/local/bin/brew shellenv)"
+    if [ -f "$HOME/.zprofile" ] && ! grep -q "/usr/local/bin/brew shellenv" "$HOME/.zprofile" 2>/dev/null; then
+        echo 'eval "$(/usr/local/bin/brew shellenv)"' >> "$HOME/.zprofile"
+    fi
+    if [ -f "$HOME/.zshrc" ] && ! grep -q "/usr/local/bin/brew shellenv" "$HOME/.zshrc" 2>/dev/null; then
+        echo 'eval "$(/usr/local/bin/brew shellenv)"' >> "$HOME/.zshrc"
+    fi
+fi
+
+echo ""
+echo "========================================================"
+if [ -x "/opt/homebrew/bin/brew" ] || [ -x "/usr/local/bin/brew" ] || command -v brew &>/dev/null; then
+    echo "🎉 Homebrew 安装并配置成功！"
+    echo "当前版本: $(brew --version 2>/dev/null | head -n 1 || echo '就绪')"
+    echo "现在可以返回 EnvHub 体验一键安装工具与版本管理了。"
+else
+    echo "⚠️ 安装流程已结束。若尚未生效，请根据终端上方提示重试或手动运行安装。"
+fi
+echo "========================================================"
+echo ""
+read -p "按回车键退出当前窗口..."
+"#;
+
+    let temp_dir = std::env::temp_dir();
+    let script_path = temp_dir.join("envhub_install_homebrew.command");
+    std::fs::write(&script_path, script_content)
+        .map_err(|e| format!("创建安装脚本失败: {}", e))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
+    }
+
+    let status = std::process::Command::new("open")
+        .args(["-a", "Terminal", script_path.to_str().unwrap_or("")])
+        .status();
+
+    if status.is_err() || !status.as_ref().unwrap().success() {
+        let _ = std::process::Command::new("open")
+            .arg(&script_path)
+            .status()
+            .map_err(|e| format!("拉起终端安装向导失败: {}", e))?;
+    }
+
+    crate::env_helper::fix_system_path();
+    Ok(true)
+}
+
 #[tauri::command]
 pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool, String> {
     // GUI applications inherit a stale PATH. Refresh it before looking for
@@ -751,12 +872,32 @@ pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool
 
     #[cfg(target_os = "macos")]
     {
-        let cmd = if tool_id == "brew" || tool_id == "homebrew" {
-            "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"".to_string()
-        } else if tool_id == "docker" {
-            "brew install --cask docker".to_string()
+        if tool_id == "brew" || tool_id == "homebrew" {
+            let _ = app.emit("install-log", "⚡ Homebrew 需要系统管理员 (sudo) 权限与交互式安装环境...".to_string());
+            let _ = app.emit("install-log", "🚀 已为您拉起 macOS 原生终端窗口执行 Homebrew 智能安装向导".to_string());
+            let _ = app.emit("install-log", "💡 请在弹出的终端窗口中输入开机密码以完成授权，安装完成后回到应用刷新即可。".to_string());
+            let _ = app.emit("install-progress", 100);
+            return launch_homebrew_terminal_installer();
+        }
+
+        // Check if brew is installed for other tools (git, docker, redis, etc.)
+        let brew_bin = if std::path::Path::new("/opt/homebrew/bin/brew").exists() {
+            "/opt/homebrew/bin/brew".to_string()
+        } else if std::path::Path::new("/usr/local/bin/brew").exists() {
+            "/usr/local/bin/brew".to_string()
+        } else if env_helper::command_available("brew") {
+            "brew".to_string()
         } else {
-            format!("brew install {}", tool_id)
+            let _ = app.emit("install-log", "❌ 未检测到 Homebrew 包管理器，无法继续安装此工具。".to_string());
+            let _ = app.emit("install-log", "🚀 正在自动为您唤起 Homebrew 安装向导...".to_string());
+            let _ = launch_homebrew_terminal_installer();
+            return Err("未检测到 Homebrew，已为您唤起 Homebrew 安装向导，请先完成 Homebrew 安装".to_string());
+        };
+
+        let cmd = if tool_id == "docker" {
+            format!("{} install --cask docker", brew_bin)
+        } else {
+            format!("{} install {}", brew_bin, tool_id)
         };
         let _ = app.emit("install-log", format!("> 执行: {}", cmd));
 
@@ -798,7 +939,7 @@ pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool
         let status = child.wait().await.map_err(|e| format!("等待 Homebrew 完成失败: {}", e))?;
         env_helper::clear_active_install_pid(child_pid);
         if !status.success() {
-            let _ = app.emit("install-log", format!("❌ Homebrew 安装失败，退出码: {:?}", status.code()));
+            let _ = app.emit("install-log", format!("❌ {} 安装失败，退出码: {:?}", tool_id, status.code()));
             return Err(format!("Homebrew 执行失败，退出码: {:?}", status.code()));
         }
         let _ = app.emit("install-log", format!("✓ {} 安装成功！", tool_id));
@@ -1054,9 +1195,13 @@ pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
             return Ok(true);
         }
 
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
         {
-            // Install Homebrew on macOS / Linux
+            return launch_homebrew_terminal_installer();
+        }
+
+        #[cfg(target_os = "linux")]
+        {
             let script = "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"";
             let status = env_helper::create_silent_tokio_command("sh")
                 .args(["-c", script])
@@ -1069,8 +1214,8 @@ pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
             }
             env_helper::fix_system_path();
             return Ok(true);
-            }
         }
+    }
 
     if let Some(home) = dirs::home_dir() {
         #[cfg(target_os = "windows")]

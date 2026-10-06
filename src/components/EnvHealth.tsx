@@ -30,7 +30,11 @@ export const EnvHealth: React.FC<EnvHealthProps> = ({
     setFixingId(id);
     try {
       await onAutoFix(id);
-      toast.success('已自动修复配置并同步环境变量！');
+      if (id === 'package-manager') {
+        toast.info('已拉起终端安装向导，请在终端窗口中完成授权与安装！');
+      } else {
+        toast.success('已自动修复配置并同步环境变量！');
+      }
       onRefresh();
     } catch (err) {
       toast.error(`自动修复失败: ${err}`);
