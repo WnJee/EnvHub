@@ -150,7 +150,8 @@ function Install-Runtime {
     param([string]$toolId, [string]$version, [string]$name)
 
     Write-EnvStep "正在安装全局运行环境: $name ($toolId@$version)"
-    Write-Host ">> 执行: mise use -g $toolId@$version" -ForegroundColor Cyan
+    Write-Host ">> 自动通过 Mise 远程解析并安装最新的匹配版本..." -ForegroundColor DarkGray
+    Write-Host ">> 执行命令: mise use -g $toolId@$version" -ForegroundColor Cyan
 
     & mise use -g "$toolId@$version"
     if ($LASTEXITCODE -eq 0) {
@@ -169,6 +170,26 @@ function Install-Runtime {
         Write-EnvErr "$name 安装失败，请检查网络连接。"
     }
     Pause-Console
+}
+
+# --- 动态查询并浏览远程版本 ---
+function Browse-RemoteVersions {
+    param([string]$toolId, [string]$name)
+    Write-EnvStep "正在查询 $name 官方远程最新可用版本列表..."
+    Write-Host "------------------------------------------------------" -ForegroundColor Cyan
+    $remoteList = (& mise ls-remote $toolId) 2>$null | Where-Object { $_ -match '^\d' } | Select-Object -Last 24
+    if ($remoteList) {
+        $remoteList | Format-Wide -Column 4 | Out-String | Write-Host
+    } else {
+        Write-Host "暂未获取到远程列表，您可直接输入版本号（如 24.10.0）" -ForegroundColor Yellow
+    }
+    Write-Host "------------------------------------------------------" -ForegroundColor Cyan
+    Write-Host "提示: 可以输入上方列出的版本号，或输入 'latest' 获取最新版" -ForegroundColor DarkGray
+    Write-Host "请输入您要安装的 $name 版本号 (直接回车取消): " -NoNewline
+    $v = Read-Host
+    if ($v) {
+        Install-Runtime $toolId $v $name
+    }
 }
 
 # --- 国内镜像加速配置 ---
@@ -223,7 +244,7 @@ function Show-RuntimeStatus {
 }
 
 # ==============================================================================
-# 子菜单交互处理
+# 子菜单交互处理 (动态解析最新版本，杜绝硬编码陈旧版本)
 # ==============================================================================
 function Menu-Node {
     while ($true) {
@@ -231,24 +252,21 @@ function Menu-Node {
         Write-Host "======================================================" -ForegroundColor Cyan
         Write-Host "  ⚡ Node.js 运行环境安装与版本管理" -ForegroundColor White
         Write-Host "======================================================" -ForegroundColor Cyan
-        Write-Host "  1) Node.js 22 (Current LTS 最新长期支持版)"
-        Write-Host "  2) Node.js 20 (Active LTS 稳定生产推荐版)"
-        Write-Host "  3) Node.js 18 (Maintenance LTS 维护版)"
-        Write-Host "  4) 自定义版本号 (如 20.18.0 或 22.11.0)"
+        Write-Host "  1) Node.js lts       (🌟 官方长期支持版，自动解析最新 LTS 如 24/22)"
+        Write-Host "  2) Node.js latest    (🚀 官方最新发布版，含最新语言特性如 26/25)"
+        Write-Host "  3) Node.js 24        (稳定主流生产大版本)"
+        Write-Host "  4) Node.js 22        (经典活跃维护大版本)"
+        Write-Host "  5) 🔍 浏览远程可用版本列表 / 自定义输入版本号"
         Write-Host "  0) 返回主菜单"
         Write-Host "------------------------------------------------------" -ForegroundColor Cyan
-        Write-Host "请输入选择 [0-4]: " -NoNewline
+        Write-Host "请输入选择 [0-5]: " -NoNewline
         $c = Read-Host
         switch ($c) {
-            "1" { Install-Runtime "node" "22" "Node.js"; return }
-            "2" { Install-Runtime "node" "20" "Node.js"; return }
-            "3" { Install-Runtime "node" "18" "Node.js"; return }
-            "4" {
-                Write-Host "请输入具体的 Node.js 版本号: " -NoNewline
-                $v = Read-Host
-                if ($v) { Install-Runtime "node" $v "Node.js" }
-                return
-            }
+            "1" { Install-Runtime "node" "lts" "Node.js"; return }
+            "2" { Install-Runtime "node" "latest" "Node.js"; return }
+            "3" { Install-Runtime "node" "24" "Node.js"; return }
+            "4" { Install-Runtime "node" "22" "Node.js"; return }
+            "5" { Browse-RemoteVersions "node" "Node.js"; return }
             "0" { return }
         }
     }
@@ -260,24 +278,21 @@ function Menu-Python {
         Write-Host "======================================================" -ForegroundColor Cyan
         Write-Host "  ⚡ Python 运行环境安装与版本管理" -ForegroundColor White
         Write-Host "======================================================" -ForegroundColor Cyan
-        Write-Host "  1) Python 3.12 (推荐现代主流稳定版)"
-        Write-Host "  2) Python 3.11 (高性能成熟版)"
-        Write-Host "  3) Python 3.10 (广泛兼容版)"
-        Write-Host "  4) 自定义版本号 (如 3.12.7 或 3.9.20)"
+        Write-Host "  1) Python latest     (🌟 官方最新稳定版，自动匹配最新 Python 3.x)"
+        Write-Host "  2) Python 3.14       (最新特性发布版)"
+        Write-Host "  3) Python 3.13       (现代主流稳定版，性能大幅提升)"
+        Write-Host "  4) Python 3.12       (企业生产成熟版)"
+        Write-Host "  5) 🔍 浏览远程可用版本列表 / 自定义输入版本号"
         Write-Host "  0) 返回主菜单"
         Write-Host "------------------------------------------------------" -ForegroundColor Cyan
-        Write-Host "请输入选择 [0-4]: " -NoNewline
+        Write-Host "请输入选择 [0-5]: " -NoNewline
         $c = Read-Host
         switch ($c) {
-            "1" { Install-Runtime "python" "3.12" "Python"; return }
-            "2" { Install-Runtime "python" "3.11" "Python"; return }
-            "3" { Install-Runtime "python" "3.10" "Python"; return }
-            "4" {
-                Write-Host "请输入具体的 Python 版本号: " -NoNewline
-                $v = Read-Host
-                if ($v) { Install-Runtime "python" $v "Python" }
-                return
-            }
+            "1" { Install-Runtime "python" "latest" "Python"; return }
+            "2" { Install-Runtime "python" "3.14" "Python"; return }
+            "3" { Install-Runtime "python" "3.13" "Python"; return }
+            "4" { Install-Runtime "python" "3.12" "Python"; return }
+            "5" { Browse-RemoteVersions "python" "Python"; return }
             "0" { return }
         }
     }
@@ -289,24 +304,21 @@ function Menu-Go {
         Write-Host "======================================================" -ForegroundColor Cyan
         Write-Host "  ⚡ Go 语言运行环境安装与版本管理" -ForegroundColor White
         Write-Host "======================================================" -ForegroundColor Cyan
-        Write-Host "  1) Go 1.23 (最新官方稳定版)"
-        Write-Host "  2) Go 1.22 (企业常用稳定版)"
-        Write-Host "  3) Go 1.21 (历史长期支持版)"
-        Write-Host "  4) 自定义版本号 (如 1.23.2 或 1.22.8)"
+        Write-Host "  1) Go latest         (🌟 官方最新稳定版，自动匹配最新如 1.27)"
+        Write-Host "  2) Go 1.27           (最新发布大版本)"
+        Write-Host "  3) Go 1.26           (成熟稳定推荐版本)"
+        Write-Host "  4) Go 1.25           (广泛兼容版本)"
+        Write-Host "  5) 🔍 浏览远程可用版本列表 / 自定义输入版本号"
         Write-Host "  0) 返回主菜单"
         Write-Host "------------------------------------------------------" -ForegroundColor Cyan
-        Write-Host "请输入选择 [0-4]: " -NoNewline
+        Write-Host "请输入选择 [0-5]: " -NoNewline
         $c = Read-Host
         switch ($c) {
-            "1" { Install-Runtime "go" "1.23" "Go"; return }
-            "2" { Install-Runtime "go" "1.22" "Go"; return }
-            "3" { Install-Runtime "go" "1.21" "Go"; return }
-            "4" {
-                Write-Host "请输入具体的 Go 版本号: " -NoNewline
-                $v = Read-Host
-                if ($v) { Install-Runtime "go" $v "Go" }
-                return
-            }
+            "1" { Install-Runtime "go" "latest" "Go"; return }
+            "2" { Install-Runtime "go" "1.27" "Go"; return }
+            "3" { Install-Runtime "go" "1.26" "Go"; return }
+            "4" { Install-Runtime "go" "1.25" "Go"; return }
+            "5" { Browse-RemoteVersions "go" "Go"; return }
             "0" { return }
         }
     }
@@ -318,26 +330,23 @@ function Menu-Java {
         Write-Host "======================================================" -ForegroundColor Cyan
         Write-Host "  ⚡ Java (JDK) 运行环境安装与版本管理" -ForegroundColor White
         Write-Host "======================================================" -ForegroundColor Cyan
-        Write-Host "  1) Java 21 (LTS 现代主流长期支持版)"
-        Write-Host "  2) Java 17 (LTS 经典稳定长期支持版)"
-        Write-Host "  3) Java 11 (LTS 传统企业版)"
-        Write-Host "  4) Java 8  (LTS 历史遗留兼容版)"
-        Write-Host "  5) 自定义版本号 (如 corretto-21 或 openjdk-17)"
+        Write-Host "  1) Java lts          (🌟 官方最新 LTS 长期支持版)"
+        Write-Host "  2) Java 25           (现代主流长期支持 LTS 版)"
+        Write-Host "  3) Java 21           (企业生产通用 LTS 版)"
+        Write-Host "  4) Java 17           (经典稳定 LTS 版)"
+        Write-Host "  5) Java 8            (历史遗留兼容版)"
+        Write-Host "  6) 🔍 浏览远程可用版本列表 / 自定义发行版 (如 corretto / temurin)"
         Write-Host "  0) 返回主菜单"
         Write-Host "------------------------------------------------------" -ForegroundColor Cyan
-        Write-Host "请输入选择 [0-5]: " -NoNewline
+        Write-Host "请输入选择 [0-6]: " -NoNewline
         $c = Read-Host
         switch ($c) {
-            "1" { Install-Runtime "java" "21" "Java JDK"; return }
-            "2" { Install-Runtime "java" "17" "Java JDK"; return }
-            "3" { Install-Runtime "java" "11" "Java JDK"; return }
-            "4" { Install-Runtime "java" "8"  "Java JDK"; return }
-            "5" {
-                Write-Host "请输入具体的 Java 版本号: " -NoNewline
-                $v = Read-Host
-                if ($v) { Install-Runtime "java" $v "Java JDK" }
-                return
-            }
+            "1" { Install-Runtime "java" "lts" "Java JDK"; return }
+            "2" { Install-Runtime "java" "25" "Java JDK"; return }
+            "3" { Install-Runtime "java" "21" "Java JDK"; return }
+            "4" { Install-Runtime "java" "17" "Java JDK"; return }
+            "5" { Install-Runtime "java" "8"  "Java JDK"; return }
+            "6" { Browse-RemoteVersions "java" "Java JDK"; return }
             "0" { return }
         }
     }
@@ -349,32 +358,31 @@ function Menu-Rust {
         Write-Host "======================================================" -ForegroundColor Cyan
         Write-Host "  ⚡ Rust 语言与 Cargo 开发环境安装" -ForegroundColor White
         Write-Host "======================================================" -ForegroundColor Cyan
-        Write-Host "  1) Rust latest (最新官方稳定版)"
-        Write-Host "  2) Rust 1.81 (成熟稳定版)"
-        Write-Host "  3) 自定义版本号 (如 1.80.0)"
+        Write-Host "  1) Rust latest / stable (🌟 官方最新稳定版工具链)"
+        Write-Host "  2) Rust nightly         (每日构建尝鲜版)"
+        Write-Host "  3) 🔍 浏览远程可用版本列表 / 自定义输入版本号"
         Write-Host "  0) 返回主菜单"
         Write-Host "------------------------------------------------------" -ForegroundColor Cyan
         Write-Host "请输入选择 [0-3]: " -NoNewline
         $c = Read-Host
         switch ($c) {
             "1" { Install-Runtime "rust" "latest" "Rust"; return }
-            "2" { Install-Runtime "rust" "1.81" "Rust"; return }
-            "3" {
-                Write-Host "请输入具体的 Rust 版本号: " -NoNewline
-                $v = Read-Host
-                if ($v) { Install-Runtime "rust" $v "Rust" }
-                return
-            }
+            "2" { Install-Runtime "rust" "nightly" "Rust"; return }
+            "3" { Browse-RemoteVersions "rust" "Rust"; return }
             "0" { return }
         }
     }
 }
 
 function Install-AllDefaults {
-    Write-EnvStep "🚀 开始一键安装全套常用开发环境 (Node.js + Python + Go + Java)"
-    Write-Host "将依次部署: Node.js 22, Python 3.12, Go 1.23, Java 21`n" -ForegroundColor Cyan
+    Write-EnvStep "🚀 开始一键安装全套最新常用开发环境 (Node.js + Python + Go + Java)"
+    Write-Host "采用智能语义标签，自动拉取官方最新 LTS 与稳定版：" -ForegroundColor Yellow
+    Write-Host "  • Node.js -> @lts" -ForegroundColor Cyan
+    Write-Host "  • Python  -> @latest" -ForegroundColor Cyan
+    Write-Host "  • Go      -> @latest" -ForegroundColor Cyan
+    Write-Host "  • Java    -> @lts`n" -ForegroundColor Cyan
 
-    & mise use -g node@22 python@3.12 go@1.23 java@21
+    & mise use -g node@lts python@latest go@latest java@lts
     & mise reshim
 
     Write-EnvSucc "全套常用开发环境部署完成！"
@@ -405,13 +413,13 @@ function Main-Menu {
         Write-Host "----------------------------------------------------------------------" -ForegroundColor Cyan
         Write-Host " 宿主系统: Windows | 包管理器: $global:PKG_MGR | Mise: $miseVer" -ForegroundColor White
         Write-Host "======================================================================" -ForegroundColor Cyan
-        Write-Host " [常用编程语言与运行环境]" -ForegroundColor Yellow
+        Write-Host " [常用编程语言与运行环境 - 动态解析最新版]" -ForegroundColor Yellow
         Write-Host "   1) Node.js   (JavaScript / TypeScript 运行环境与 NPM)"
         Write-Host "   2) Python    (Python3 科学计算、AI 与后端开发环境)"
         Write-Host "   3) Go        (Golang 高性能云原生开发环境)"
         Write-Host "   4) Java      (Java JDK 企业级通用运行环境)"
         Write-Host "   5) Rust      (Rust 语言编译器与 Cargo 包管理)"
-        Write-Host "   6) 🚀 一键安装全部常用开发环境 (Node + Python + Go + Java)"
+        Write-Host "   6) 🚀 一键安装全部常用开发环境 (Node.js LTS + Python + Go + Java)"
         Write-Host ""
         Write-Host " [系统工具、镜像与诊断]" -ForegroundColor Yellow
         Write-Host "   7) ⚡ 一键配置国内高速镜像加速 (NPM, PyPI, Go Proxy, Cargo)"

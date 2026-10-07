@@ -4,7 +4,6 @@
 # 项目地址: https://github.com/WnJee/EnvHub
 # ==============================================================================
 
-# 发生错误不直接退出主循环，以便提供友好的菜单交互
 set -u
 
 # --- 颜色与样式配置 ---
@@ -66,7 +65,6 @@ ensure_mise() {
 
   mkdir -p "$HOME/.local/bin"
   if [ "$USE_MIRROR" -eq 1 ]; then
-    # 优先通过 mise.run 或官方安装器安装
     curl -fsSL https://mise.run | sh || curl -fsSL https://mise.jdx.dev/install.sh | sh
   else
     curl -fsSL https://mise.run | sh
@@ -182,7 +180,8 @@ install_runtime() {
   local name="$3"
 
   log_step "正在安装全局运行环境: ${name} (${tool_id}@${version})"
-  echo ">> 执行: mise use -g ${tool_id}@${version}"
+  echo ">> 自动通过 Mise 远程解析并安装最新的匹配版本..."
+  echo ">> 执行命令: mise use -g ${tool_id}@${version}"
   
   if "$MISE_BIN" use -g "${tool_id}@${version}"; then
     "$MISE_BIN" reshim
@@ -200,6 +199,21 @@ install_runtime() {
     log_err "${name} 安装失败，请检查网络连接或日志。"
   fi
   press_enter
+}
+
+# --- 动态查看远程版本列表 ---
+browse_remote_versions() {
+  local tool_id="$1"
+  local name="$2"
+  log_step "正在查询 ${name} 官方远程最新可用版本列表..."
+  echo "------------------------------------------------------"
+  "$MISE_BIN" ls-remote "$tool_id" 2>/dev/null | grep -E '^[0-9]' | tail -n 25 | column -c 80 2>/dev/null || "$MISE_BIN" ls-remote "$tool_id" 2>/dev/null | tail -n 20
+  echo "------------------------------------------------------"
+  echo "提示: 可以输入上方列出的具体版本号 (如 24.9.0 或 3.14.2)，或输入 'latest' 获取最新版"
+  read -r -p "请输入您要安装的 ${name} 版本号 (直接回车取消): " custom_v
+  if [ -n "$custom_v" ]; then
+    install_runtime "$tool_id" "$custom_v" "$name"
+  fi
 }
 
 # --- 国内镜像源配置 ---
@@ -263,7 +277,7 @@ show_runtime_status() {
 }
 
 # ==============================================================================
-# 子菜单交互处理
+# 子菜单交互处理 (动态解析最新版本，杜绝硬编码陈旧版本)
 # ==============================================================================
 menu_node() {
   while true; do
@@ -271,22 +285,20 @@ menu_node() {
     echo -e "${BOLD}${CYAN}======================================================${NC}"
     echo -e "${BOLD}  ⚡ Node.js 运行环境安装与版本管理${NC}"
     echo -e "${BOLD}${CYAN}======================================================${NC}"
-    echo "  1) Node.js 22 (Current LTS 最新长期支持版)"
-    echo "  2) Node.js 20 (Active LTS 稳定生产推荐版)"
-    echo "  3) Node.js 18 (Maintenance LTS 维护版)"
-    echo "  4) 自定义版本号 (如 20.18.0 或 22.11.0)"
+    echo "  1) Node.js lts       (🌟 官方长期支持版，自动解析最新 LTS 如 24/22)"
+    echo "  2) Node.js latest    (🚀 官方最新发布版，含最新语言特性如 26/25)"
+    echo "  3) Node.js 24        (稳定主流生产大版本)"
+    echo "  4) Node.js 22        (经典活跃维护大版本)"
+    echo "  5) 🔍 浏览远程可用版本列表 / 自定义输入版本号"
     echo "  0) 返回主菜单"
     echo -e "${CYAN}------------------------------------------------------${NC}"
-    read -r -p "请输入选择 [0-4]: " sub_choice
+    read -r -p "请输入选择 [0-5]: " sub_choice
     case "$sub_choice" in
-      1) install_runtime "node" "22" "Node.js"; break ;;
-      2) install_runtime "node" "20" "Node.js"; break ;;
-      3) install_runtime "node" "18" "Node.js"; break ;;
-      4)
-        read -r -p "请输入具体的 Node.js 版本号: " custom_v
-        if [ -n "$custom_v" ]; then install_runtime "node" "$custom_v" "Node.js"; fi
-        break
-        ;;
+      1) install_runtime "node" "lts" "Node.js"; break ;;
+      2) install_runtime "node" "latest" "Node.js"; break ;;
+      3) install_runtime "node" "24" "Node.js"; break ;;
+      4) install_runtime "node" "22" "Node.js"; break ;;
+      5) browse_remote_versions "node" "Node.js"; break ;;
       0) break ;;
       *) echo "无效选择，请重新输入"; sleep 1 ;;
     esac
@@ -299,22 +311,20 @@ menu_python() {
     echo -e "${BOLD}${CYAN}======================================================${NC}"
     echo -e "${BOLD}  ⚡ Python 运行环境安装与版本管理${NC}"
     echo -e "${BOLD}${CYAN}======================================================${NC}"
-    echo "  1) Python 3.12 (推荐现代主流稳定版)"
-    echo "  2) Python 3.11 (高性能成熟版)"
-    echo "  3) Python 3.10 (广泛兼容版)"
-    echo "  4) 自定义版本号 (如 3.12.7 或 3.9.20)"
+    echo "  1) Python latest     (🌟 官方最新稳定版，自动匹配最新 Python 3.x)"
+    echo "  2) Python 3.14       (最新特性发布版)"
+    echo "  3) Python 3.13       (现代主流稳定版，性能大幅提升)"
+    echo "  4) Python 3.12       (企业生产成熟版)"
+    echo "  5) 🔍 浏览远程可用版本列表 / 自定义输入版本号"
     echo "  0) 返回主菜单"
     echo -e "${CYAN}------------------------------------------------------${NC}"
-    read -r -p "请输入选择 [0-4]: " sub_choice
+    read -r -p "请输入选择 [0-5]: " sub_choice
     case "$sub_choice" in
-      1) install_runtime "python" "3.12" "Python"; break ;;
-      2) install_runtime "python" "3.11" "Python"; break ;;
-      3) install_runtime "python" "3.10" "Python"; break ;;
-      4)
-        read -r -p "请输入具体的 Python 版本号: " custom_v
-        if [ -n "$custom_v" ]; then install_runtime "python" "$custom_v" "Python"; fi
-        break
-        ;;
+      1) install_runtime "python" "latest" "Python"; break ;;
+      2) install_runtime "python" "3.14" "Python"; break ;;
+      3) install_runtime "python" "3.13" "Python"; break ;;
+      4) install_runtime "python" "3.12" "Python"; break ;;
+      5) browse_remote_versions "python" "Python"; break ;;
       0) break ;;
       *) echo "无效选择，请重新输入"; sleep 1 ;;
     esac
@@ -327,22 +337,20 @@ menu_go() {
     echo -e "${BOLD}${CYAN}======================================================${NC}"
     echo -e "${BOLD}  ⚡ Go 语言运行环境安装与版本管理${NC}"
     echo -e "${BOLD}${CYAN}======================================================${NC}"
-    echo "  1) Go 1.23 (最新官方稳定版)"
-    echo "  2) Go 1.22 (企业常用稳定版)"
-    echo "  3) Go 1.21 (历史长期支持版)"
-    echo "  4) 自定义版本号 (如 1.23.2 或 1.22.8)"
+    echo "  1) Go latest         (🌟 官方最新稳定版，自动匹配最新如 1.27)"
+    echo "  2) Go 1.27           (最新发布大版本)"
+    echo "  3) Go 1.26           (成熟稳定推荐版本)"
+    echo "  4) Go 1.25           (广泛兼容版本)"
+    echo "  5) 🔍 浏览远程可用版本列表 / 自定义输入版本号"
     echo "  0) 返回主菜单"
     echo -e "${CYAN}------------------------------------------------------${NC}"
-    read -r -p "请输入选择 [0-4]: " sub_choice
+    read -r -p "请输入选择 [0-5]: " sub_choice
     case "$sub_choice" in
-      1) install_runtime "go" "1.23" "Go"; break ;;
-      2) install_runtime "go" "1.22" "Go"; break ;;
-      3) install_runtime "go" "1.21" "Go"; break ;;
-      4)
-        read -r -p "请输入具体的 Go 版本号: " custom_v
-        if [ -n "$custom_v" ]; then install_runtime "go" "$custom_v" "Go"; fi
-        break
-        ;;
+      1) install_runtime "go" "latest" "Go"; break ;;
+      2) install_runtime "go" "1.27" "Go"; break ;;
+      3) install_runtime "go" "1.26" "Go"; break ;;
+      4) install_runtime "go" "1.25" "Go"; break ;;
+      5) browse_remote_versions "go" "Go"; break ;;
       0) break ;;
       *) echo "无效选择，请重新输入"; sleep 1 ;;
     esac
@@ -355,24 +363,22 @@ menu_java() {
     echo -e "${BOLD}${CYAN}======================================================${NC}"
     echo -e "${BOLD}  ⚡ Java (JDK) 运行环境安装与版本管理${NC}"
     echo -e "${BOLD}${CYAN}======================================================${NC}"
-    echo "  1) Java 21 (LTS 现代主流长期支持版)"
-    echo "  2) Java 17 (LTS 经典稳定长期支持版)"
-    echo "  3) Java 11 (LTS 传统企业版)"
-    echo "  4) Java 8  (LTS 历史遗留兼容版)"
-    echo "  5) 自定义版本号 (如 corretto-21 或 openjdk-17)"
+    echo "  1) Java lts          (🌟 官方最新 LTS 长期支持版)"
+    echo "  2) Java 25           (现代主流长期支持 LTS 版)"
+    echo "  3) Java 21           (企业生产通用 LTS 版)"
+    echo "  4) Java 17           (经典稳定 LTS 版)"
+    echo "  5) Java 8            (历史遗留兼容版)"
+    echo "  6) 🔍 浏览远程可用版本列表 / 自定义发行版 (如 corretto / temurin)"
     echo "  0) 返回主菜单"
     echo -e "${CYAN}------------------------------------------------------${NC}"
-    read -r -p "请输入选择 [0-5]: " sub_choice
+    read -r -p "请输入选择 [0-6]: " sub_choice
     case "$sub_choice" in
-      1) install_runtime "java" "21" "Java JDK"; break ;;
-      2) install_runtime "java" "17" "Java JDK"; break ;;
-      3) install_runtime "java" "11" "Java JDK"; break ;;
-      4) install_runtime "java" "8"  "Java JDK"; break ;;
-      5)
-        read -r -p "请输入具体的 Java 版本号: " custom_v
-        if [ -n "$custom_v" ]; then install_runtime "java" "$custom_v" "Java JDK"; fi
-        break
-        ;;
+      1) install_runtime "java" "lts" "Java JDK"; break ;;
+      2) install_runtime "java" "25" "Java JDK"; break ;;
+      3) install_runtime "java" "21" "Java JDK"; break ;;
+      4) install_runtime "java" "17" "Java JDK"; break ;;
+      5) install_runtime "java" "8"  "Java JDK"; break ;;
+      6) browse_remote_versions "java" "Java JDK"; break ;;
       0) break ;;
       *) echo "无效选择，请重新输入"; sleep 1 ;;
     esac
@@ -385,20 +391,16 @@ menu_rust() {
     echo -e "${BOLD}${CYAN}======================================================${NC}"
     echo -e "${BOLD}  ⚡ Rust 语言与 Cargo 开发环境安装${NC}"
     echo -e "${BOLD}${CYAN}======================================================${NC}"
-    echo "  1) Rust latest (最新官方稳定版)"
-    echo "  2) Rust 1.81 (成熟稳定版)"
-    echo "  3) 自定义版本号 (如 1.80.0)"
+    echo "  1) Rust latest / stable (🌟 官方最新稳定版工具链)"
+    echo "  2) Rust nightly         (每日构建尝鲜版)"
+    echo "  3) 🔍 浏览远程可用版本列表 / 自定义输入版本号"
     echo "  0) 返回主菜单"
     echo -e "${CYAN}------------------------------------------------------${NC}"
     read -r -p "请输入选择 [0-3]: " sub_choice
     case "$sub_choice" in
       1) install_runtime "rust" "latest" "Rust"; break ;;
-      2) install_runtime "rust" "1.81" "Rust"; break ;;
-      3)
-        read -r -p "请输入具体的 Rust 版本号: " custom_v
-        if [ -n "$custom_v" ]; then install_runtime "rust" "$custom_v" "Rust"; fi
-        break
-        ;;
+      2) install_runtime "rust" "nightly" "Rust"; break ;;
+      3) browse_remote_versions "rust" "Rust"; break ;;
       0) break ;;
       *) echo "无效选择，请重新输入"; sleep 1 ;;
     esac
@@ -406,11 +408,15 @@ menu_rust() {
 }
 
 install_all_defaults() {
-  log_step "🚀 开始一键安装全套常用开发环境 (Node.js + Python + Go + Java)"
-  echo "将依次部署: Node.js 22, Python 3.12, Go 1.23, Java 21"
+  log_step "🚀 开始一键安装全套最新常用开发环境 (Node.js + Python + Go + Java)"
+  echo "采用智能语义标签，自动拉取官方最新 LTS 与稳定版："
+  echo "  • Node.js -> @lts"
+  echo "  • Python  -> @latest"
+  echo "  • Go      -> @latest"
+  echo "  • Java    -> @lts"
   echo ""
   
-  "$MISE_BIN" use -g node@22 python@3.12 go@1.23 java@21
+  "$MISE_BIN" use -g node@lts python@latest go@latest java@lts
   "$MISE_BIN" reshim
 
   log_succ "全套常用开发环境部署完成！"
@@ -447,13 +453,13 @@ main_menu() {
     echo -e "${CYAN}----------------------------------------------------------------------${NC}"
     echo -e " 系统架构: ${BOLD}${os_info}${NC} | 包管理器: ${BOLD}${PKG_MGR:-检测中}${NC} | Mise: ${GREEN}${mise_ver}${NC}"
     echo -e "${CYAN}======================================================================${NC}"
-    echo -e " ${BOLD}[常用编程语言与运行环境]${NC}"
+    echo -e " ${BOLD}[常用编程语言与运行环境 - 动态解析最新版]${NC}"
     echo "   1) Node.js   (JavaScript / TypeScript 运行环境与 NPM)"
     echo "   2) Python    (Python3 科学计算、AI 与后端开发环境)"
     echo "   3) Go        (Golang 高性能云原生开发环境)"
     echo "   4) Java      (Java JDK 企业级通用运行环境)"
     echo "   5) Rust      (Rust 语言编译器与 Cargo 包管理)"
-    echo "   6) 🚀 一键安装全部常用开发环境 (Node + Python + Go + Java)"
+    echo "   6) 🚀 一键安装全部常用开发环境 (Node.js LTS + Python + Go + Java)"
     echo ""
     echo -e " ${BOLD}[系统工具、镜像与诊断]${NC}"
     echo "   7) ⚡ 一键配置国内高速镜像加速 (NPM, PyPI, Go Proxy, Cargo)"
