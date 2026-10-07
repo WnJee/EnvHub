@@ -22,6 +22,25 @@
 
 ---
 
+## 📖 项目介绍
+
+**EnvHub** 是一款专为开发者打造的跨平台多语言环境版本管理桌面工具。它摒弃了 Electron 的笨重，基于 **Tauri v2 (Rust) + React 18 + Tailwind CSS** 构建，底层无缝集成成熟的高性能 **Mise CLI** 引擎。
+
+EnvHub 实现了**极低资源占用（常驻内存 ~30-50MB，安装包 ~10MB）**，并在图形化界面下带来了即时切换全局/项目局部版本、国内镜像源一键测速与加速、系统级包管理以及终端环境变量自动同步等强大功能。
+
+---
+
+## ✨ 核心特性
+
+- 🚀 **全语言生态运行时管理**：支持 Node.js、Python、Go、Rust、Java、Bun、Deno、Ruby、PHP 等语言的多版本下载、共存与一键切换。
+- 📦 **项目级环境精准隔离**：自动识别并维护项目根目录下的 `.mise.toml`、`.tool-versions` 或 `package.json`，进入目录即刻生效，无需污染全局系统。
+- ⚡ **国内高速镜像源测速与切换**：内置 NPM (淘宝/腾讯)、Python Pip (清华/阿里/豆瓣)、Go Modules (Goproxy.cn)、Cargo (字节 rsproxy/中科大)、Homebrew 等国内 CDN 镜像源，支持实时节点测速并一键写入系统配置。
+- 🛠️ **系统工具箱与跨平台包管理**：抽象统一接口，macOS 路由至 `brew`，Windows 路由至 `winget`，Linux 路由至 `apt/pacman`，一键安装 Git、Docker CLI、CMake、Neovim 等。
+- 🔍 **环境健康体检与 Shell 修复**：解决 macOS/Linux 下 GUI 桌面应用无法继承终端 `~/.zshrc` PATH 的痛点，提供一键自动注入与 Shims 诊断。
+- 💻 **流式异步微终端**：Rust 异步子进程实时捕获编译、下载与解压进度，向前端推流日志，UI 始终丝滑响应。
+
+---
+
 ## ⚡ 极速开始：跨平台交互式终端配置脚本 (CLI Quick Start)
 
 > 如果您无需或暂未安装图形化客户端，可以直接使用我们提供的**全平台交互式终端引导脚本**。
@@ -92,25 +111,6 @@
 ======================================================================
 请输入对应的功能数字 [0-9]: 
 ```
-
----
-
-## 📖 项目介绍
-
-**EnvHub** 是一款专为开发者打造的跨平台多语言环境版本管理桌面工具。它摒弃了 Electron 的笨重，基于 **Tauri v2 (Rust) + React 18 + Tailwind CSS** 构建，底层无缝集成成熟的高性能 **Mise CLI** 引擎。
-
-EnvHub 实现了**极低资源占用（常驻内存 ~30-50MB，安装包 ~10MB）**，并在图形化界面下带来了即时切换全局/项目局部版本、国内镜像源一键测速与加速、系统级包管理以及终端环境变量自动同步等强大功能。
-
----
-
-## ✨ 核心特性
-
-- 🚀 **全语言生态运行时管理**：支持 Node.js、Python、Go、Rust、Java、Bun、Deno、Ruby、PHP 等语言的多版本下载、共存与一键切换。
-- 📦 **项目级环境精准隔离**：自动识别并维护项目根目录下的 `.mise.toml`、`.tool-versions` 或 `package.json`，进入目录即刻生效，无需污染全局系统。
-- ⚡ **国内高速镜像源测速与切换**：内置 NPM (淘宝/腾讯)、Python Pip (清华/阿里/豆瓣)、Go Modules (Goproxy.cn)、Cargo (字节 rsproxy/中科大)、Homebrew 等国内 CDN 镜像源，支持实时节点测速并一键写入系统配置。
-- 🛠️ **系统工具箱与跨平台包管理**：抽象统一接口，macOS 路由至 `brew`，Windows 路由至 `winget`，Linux 路由至 `apt/pacman`，一键安装 Git、Docker CLI、CMake、Neovim 等。
-- 🔍 **环境健康体检与 Shell 修复**：解决 macOS/Linux 下 GUI 桌面应用无法继承终端 `~/.zshrc` PATH 的痛点，提供一键自动注入与 Shims 诊断。
-- 💻 **流式异步微终端**：Rust 异步子进程实时捕获编译、下载与解压进度，向前端推流日志，UI 始终丝滑响应。
 
 ---
 

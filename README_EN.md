@@ -20,6 +20,25 @@
 
 ---
 
+## 📖 Introduction
+
+**EnvHub** is a cross-platform desktop application designed for developers to manage multi-language runtimes and development environments. Built on top of **Tauri v2 (Rust) + React 18 + Tailwind CSS**, EnvHub seamlessly integrates the powerful, battle-tested **Mise CLI** engine under the hood.
+
+Unlike resource-heavy Electron apps, EnvHub achieves **minimal resource footprint (~30-50MB RAM, ~10MB package size)** while delivering instant global/local version switching, domestic mirror speedup & latency benchmarking, system package management, and automatic shell environment synchronization.
+
+---
+
+## ✨ Features
+
+- 🚀 **Full-Stack Runtime Version Management**: Easily install, coexist, and switch versions for Node.js, Python, Go, Rust, Java, Bun, Deno, Ruby, PHP, and more.
+- 📦 **Project-Level Environment Isolation**: Automatically detect and manage `.mise.toml`, `.tool-versions`, or `package.json` in project directories for zero-friction version switching on `cd`.
+- ⚡ **Mirror Acceleration & Latency Benchmarks**: Built-in mirror sources for NPM, Python Pip, Go Modules (GOPROXY), Cargo (Rust Crates), and Homebrew with real-time ping testing and 1-click configuration persistence.
+- 🛠️ **System Developer Toolbox**: Unified abstraction over platform package managers (`brew` on macOS, `winget` on Windows, `apt/pacman` on Linux) to install Git, Docker CLI, CMake, Neovim, etc.
+- 🔍 **Environment Health Check & Shell Fixes**: Automatically detect Shell RC files (`~/.zshrc`, `~/.bashrc`) and fix PATH inheritance issues for GUI applications on macOS/Linux with 1-click auto-repair.
+- 💻 **Streaming Mini-Terminal**: Tokio asynchronous subprocess output capture with real-time log streaming and animated progress indicators.
+
+---
+
 ## ⚡ Quick Start: Cross-Platform Interactive CLI Wizard
 
 > If you don't need or haven't installed the desktop client yet, you can directly use our **cross-platform interactive terminal setup wizard**.
@@ -90,25 +109,6 @@ If you have cloned or downloaded the repository:
 ======================================================================
 Please select an option [0-9]: 
 ```
-
----
-
-## 📖 Introduction
-
-**EnvHub** is a cross-platform desktop application designed for developers to manage multi-language runtimes and development environments. Built on top of **Tauri v2 (Rust) + React 18 + Tailwind CSS**, EnvHub seamlessly integrates the powerful, battle-tested **Mise CLI** engine under the hood.
-
-Unlike resource-heavy Electron apps, EnvHub achieves **minimal resource footprint (~30-50MB RAM, ~10MB package size)** while delivering instant global/local version switching, domestic mirror speedup & latency benchmarking, system package management, and automatic shell environment synchronization.
-
----
-
-## ✨ Features
-
-- 🚀 **Full-Stack Runtime Version Management**: Easily install, coexist, and switch versions for Node.js, Python, Go, Rust, Java, Bun, Deno, Ruby, PHP, and more.
-- 📦 **Project-Level Environment Isolation**: Automatically detect and manage `.mise.toml`, `.tool-versions`, or `package.json` in project directories for zero-friction version switching on `cd`.
-- ⚡ **Mirror Acceleration & Latency Benchmarks**: Built-in mirror sources for NPM, Python Pip, Go Modules (GOPROXY), Cargo (Rust Crates), and Homebrew with real-time ping testing and 1-click configuration persistence.
-- 🛠️ **System Developer Toolbox**: Unified abstraction over platform package managers (`brew` on macOS, `winget` on Windows, `apt/pacman` on Linux) to install Git, Docker CLI, CMake, Neovim, etc.
-- 🔍 **Environment Health Check & Shell Fixes**: Automatically detect Shell RC files (`~/.zshrc`, `~/.bashrc`) and fix PATH inheritance issues for GUI applications on macOS/Linux with 1-click auto-repair.
-- 💻 **Streaming Mini-Terminal**: Tokio asynchronous subprocess output capture with real-time log streaming and animated progress indicators.
 
 ---
 
