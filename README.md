@@ -22,6 +22,79 @@
 
 ---
 
+## ⚡ 极速开始：跨平台交互式终端配置脚本 (CLI Quick Start)
+
+> 如果您无需或暂未安装图形化客户端，可以直接使用我们提供的**全平台交互式终端引导脚本**。
+> 脚本将全自动检测并安装 **Mise**、按需安装宿主包管理器（macOS **Homebrew** / Windows **Scoop**），并通过友好的**数字键盘选择菜单**一键安装和配置主流语言环境与国内镜像加速。
+
+### 1. 一键在线执行命令
+
+无需手动克隆代码仓库，直接在终端/命令行中粘贴以下命令即可快速启动：
+
+- **🍎 macOS / 🐧 Linux**：
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/WnJee/EnvHub/main/scripts/setup_interactive.sh | bash
+  ```
+
+- **🪟 Windows (PowerShell)**：
+  ```powershell
+  irm https://raw.githubusercontent.com/WnJee/EnvHub/main/scripts/setup_interactive.ps1 | iex
+  ```
+
+---
+
+### 2. 本地下载或克隆运行
+
+若您已克隆或下载了本仓库：
+
+- **macOS / Linux**：
+  ```bash
+  bash scripts/setup_interactive.sh
+  # 或赋予执行权限后直接运行:
+  chmod +x scripts/setup_interactive.sh && ./scripts/setup_interactive.sh
+  ```
+- **Windows**：
+  - **方法一（推荐，双击即用）**：直接双击运行 [`scripts/setup_interactive.bat`](./scripts/setup_interactive.bat)；
+  - **方法二（PowerShell 终端）**：
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File scripts\setup_interactive.ps1
+    ```
+
+---
+
+### 3. 交互式主界面预览
+
+```text
+  ______            _   _       _     
+ |  ____|          | | | |     | |    
+ | |__   _ ____   _| |_| |_   _| |__  
+ |  __| | '_ \ \ / /  _  | | | | '_ \ 
+ | |____| | | \ V /| | | | |_| | |_) |
+ |______|_| |_|\_/ |_| |_|\__,_|_.__/ 
+⚡ EnvHub 跨平台开发环境交互式向导
+----------------------------------------------------------------------
+ 系统架构: Darwin (arm64) | 包管理器: Homebrew (Ready) | Mise: v2024.x.x
+======================================================================
+ [常用编程语言与运行环境]
+   1) Node.js   (JavaScript / TypeScript 运行环境与 NPM)
+   2) Python    (Python3 科学计算、AI 与后端开发环境)
+   3) Go        (Golang 高性能云原生开发环境)
+   4) Java      (Java JDK 企业级通用运行环境)
+   5) Rust      (Rust 语言编译器与 Cargo 包管理)
+   6) 🚀 一键安装全部常用开发环境 (Node + Python + Go + Java)
+
+ [系统工具、镜像与诊断]
+   7) ⚡ 一键配置国内高速镜像加速 (NPM, PyPI, Go Proxy, Cargo)
+   8) 📋 查看当前已安装的运行时版本列表与状态
+   9) 🔄 刷新与同步全局 Shims (mise reshim)
+
+   0) 🚪 退出脚本 (Exit)
+======================================================================
+请输入对应的功能数字 [0-9]: 
+```
+
+---
+
 ## 📖 项目介绍
 
 **EnvHub** 是一款专为开发者打造的跨平台多语言环境版本管理桌面工具。它摒弃了 Electron 的笨重，基于 **Tauri v2 (Rust) + React 18 + Tailwind CSS** 构建，底层无缝集成成熟的高性能 **Mise CLI** 引擎。

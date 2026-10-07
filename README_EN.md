@@ -20,6 +20,79 @@
 
 ---
 
+## ⚡ Quick Start: Cross-Platform Interactive CLI Wizard
+
+> If you don't need or haven't installed the desktop client yet, you can directly use our **cross-platform interactive terminal setup wizard**.
+> It automatically checks and installs **Mise**, prompts and sets up host package managers (macOS **Homebrew** / Windows **Scoop**), and provides a clean **numeric menu** to install runtimes and configure high-speed mirrors with 1-click.
+
+### 1. One-Line Online Execution
+
+Run directly in your terminal without manual git cloning:
+
+- **🍎 macOS / 🐧 Linux**:
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/WnJee/EnvHub/main/scripts/setup_interactive.sh | bash
+  ```
+
+- **🪟 Windows (PowerShell)**:
+  ```powershell
+  irm https://raw.githubusercontent.com/WnJee/EnvHub/main/scripts/setup_interactive.ps1 | iex
+  ```
+
+---
+
+### 2. Local Download / Cloned Execution
+
+If you have cloned or downloaded the repository:
+
+- **macOS / Linux**:
+  ```bash
+  bash scripts/setup_interactive.sh
+  # or make executable and run:
+  chmod +x scripts/setup_interactive.sh && ./scripts/setup_interactive.sh
+  ```
+- **Windows**:
+  - **Option 1 (Recommended, double-click)**: Run [`scripts/setup_interactive.bat`](./scripts/setup_interactive.bat);
+  - **Option 2 (PowerShell)**:
+    ```powershell
+    powershell -ExecutionPolicy Bypass -File scripts\setup_interactive.ps1
+    ```
+
+---
+
+### 3. Interactive Terminal Preview
+
+```text
+  ______            _   _       _     
+ |  ____|          | | | |     | |    
+ | |__   _ ____   _| |_| |_   _| |__  
+ |  __| | '_ \ \ / /  _  | | | | '_ \ 
+ | |____| | | \ V /| | | | |_| | |_) |
+ |______|_| |_|\_/ |_| |_|\__,_|_.__/ 
+⚡ EnvHub Cross-Platform Interactive Wizard
+----------------------------------------------------------------------
+ OS: Darwin (arm64) | Package Manager: Homebrew (Ready) | Mise: v2024.x.x
+======================================================================
+ [Common Runtimes & Languages]
+   1) Node.js   (JavaScript / TypeScript Runtime & NPM)
+   2) Python    (Python3 Data Science, AI & Backend)
+   3) Go        (Golang Cloud-Native High Performance Runtime)
+   4) Java      (Java JDK Enterprise General Runtime)
+   5) Rust      (Rust Toolchain & Cargo Package Manager)
+   6) 🚀 1-Click Install All Common Runtimes (Node + Python + Go + Java)
+
+ [System Tools, Mirrors & Diagnostics]
+   7) ⚡ 1-Click Fast Mirror Acceleration (NPM, PyPI, Go Proxy, Cargo)
+   8) 📋 View Installed Runtime Versions & Status
+   9) 🔄 Reshim Global Binary Links (mise reshim)
+
+   0) 🚪 Exit Wizard
+======================================================================
+Please select an option [0-9]: 
+```
+
+---
+
 ## 📖 Introduction
 
 **EnvHub** is a cross-platform desktop application designed for developers to manage multi-language runtimes and development environments. Built on top of **Tauri v2 (Rust) + React 18 + Tailwind CSS**, EnvHub seamlessly integrates the powerful, battle-tested **Mise CLI** engine under the hood.
