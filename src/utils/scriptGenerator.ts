@@ -10,6 +10,15 @@ export interface ExportScriptOptions {
   includeEnvHook: boolean;
 }
 
+function selectedTools(tools: ExportToolItem[]): ExportToolItem[] {
+  return tools.filter(t => t.checked && t.version && t.version !== 'system').map(t => {
+    if (![t.id, t.version].every(v => /^[a-zA-Z0-9][a-zA-Z0-9._+-]*$/.test(v) && !v.includes('..'))) {
+      throw new Error(`Invalid tool or version: ${t.id}`);
+    }
+    return { ...t, name: t.name.replace(/["$`\\\r\n]/g, '') };
+  });
+}
+
 /**
  * Generate macOS / Linux Shell Setup Script (setup_envhub.sh)
  */
@@ -17,7 +26,7 @@ export function generateUnixShellScript(
   tools: ExportToolItem[],
   options: ExportScriptOptions
 ): string {
-  const selected = tools.filter((t) => t.checked && t.version && t.version !== 'system');
+  const selected = selectedTools(tools);
   
   const toolInstalls = selected
     .map((t) => `  install_tool "${t.id}" "${t.version}" "${t.name}"`)
@@ -33,7 +42,7 @@ export function generateUnixShellScript(
 # 由 EnvHub 自动导出生成 | https://github.com/WnJee/EnvHub
 # ==============================================================================
 
-set -e
+set -euo pipefail
 
 # --- 颜色与样式输出 ---
 BOLD="\\033[1m"
@@ -116,14 +125,10 @@ if command -v npm &> /dev/null; then
   log_succ "已配置 NPM 镜像源 -> https://registry.npmmirror.com/"
 fi
 
-# Python Pip 镜像源加速
-mkdir -p "\$HOME/.pip"
-cat << 'PIPCFG' > "\$HOME/.pip/pip.conf"
-[global]
-index-url = https://pypi.tuna.tsinghua.edu.cn/simple
-trusted-host = pypi.tuna.tsinghua.edu.cn
-PIPCFG
-log_succ "已配置 Pip 镜像源 -> 清华大学 TUNA 镜像"
+# Python Pip: use pip's config editor rather than replacing the whole file.
+if command -v python3 &> /dev/null; then
+  python3 -m pip config --user set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple || log_warn "Pip 不可用，跳过镜像配置"
+fi
 
 # Go GOPROXY 加速
 if command -v go &> /dev/null; then
@@ -133,6 +138,9 @@ fi
 
 # Rust Crates.io 镜像加速 (rsproxy)
 mkdir -p "\$HOME/.cargo"
+if [ -e "$HOME/.cargo/config.toml" ] || [ -e "$HOME/.cargo/config" ]; then
+  log_warn "保留已有 Cargo 配置；请在 EnvHub 中合并镜像设置"
+else
 cat << 'CARGOCFG' > "\$HOME/.cargo/config.toml"
 [source.crates-io]
 replace-with = 'rsproxy-sparse'
@@ -144,6 +152,7 @@ registry = "sparse+https://rsproxy.cn/index/"
 git-fetch-with-cli = true
 CARGOCFG
 log_succ "已配置 Cargo 镜像源 -> rsproxy.cn"
+fi
 `
     : `log_step "步骤 3/4: 跳过国内镜像源配置"`
 }
@@ -168,6 +177,7 @@ ${toolInstalls}
 ${options.includeMirrors ? `# Apply mirrors that require their runtime after installation.
 if command -v npm &> /dev/null; then npm config set registry https://registry.npmmirror.com/ || true; fi
 if command -v go &> /dev/null; then go env -w GOPROXY=https://goproxy.cn,direct || true; fi
+if command -v python3 &> /dev/null; then python3 -m pip config --user set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple || log_warn "Pip mirror not applied"; fi
 if command -v brew &> /dev/null; then
   export HOMEBREW_BOTTLE_DOMAIN=https://mirrors.ustc.edu.cn/homebrew-bottles
 fi` : ''}
@@ -201,7 +211,7 @@ export function generateWindowsPowerShellScript(
   tools: ExportToolItem[],
   options: ExportScriptOptions
 ): string {
-  const selected = tools.filter((t) => t.checked && t.version && t.version !== 'system');
+  const selected = selectedTools(tools);
 
   const toolInstalls = selected
     .map((t) => `  Install-EnvTool -ToolId "${t.id}" -Version "${t.version}" -Name "${t.name}"`)
@@ -292,14 +302,14 @@ if (-not (Test-Path $ProfileDir)) {
 
 $MiseHook = @'
 # === EnvHub / Mise Activation Hook ===
-$MiseBin = if (Get-Command mise -ErrorAction SilentlyContinue) { 'mise' } elseif (Test-Path "$env:LOCALAPPDATA\mise\bin\mise.exe") { "$env:LOCALAPPDATA\mise\bin\mise.exe" } else { $null }
+$MiseBin = if (Get-Command mise -ErrorAction SilentlyContinue) { 'mise' } elseif (Test-Path "$env:LOCALAPPDATA\\mise\\bin\\mise.exe") { "$env:LOCALAPPDATA\\mise\\bin\\mise.exe" } else { $null }
 if ($MiseBin) {
     $MiseShell = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell' }
     (& $MiseBin activate $MiseShell) | Out-String | Invoke-Expression
 }
 '@
 if (Test-Path $PROFILE) {
-    $ExistingProfile = Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue
+    $ExistingProfile = [string](Get-Content $PROFILE -Raw -ErrorAction SilentlyContinue)
     $Targets = @(
         '(& mise activate ps1) | Out-String | Invoke-Expression',
         '(& $MiseCommand.Source activate ps1) | Out-String | Invoke-Expression',
@@ -319,7 +329,7 @@ if (Test-Path $PROFILE) {
     if ($FixedProfile -ne $ExistingProfile) {
         Set-Content -Path $PROFILE -Value $FixedProfile -Encoding UTF8
         Write-EnvSucc "已自动修复 Profile 中的激活命令为 PowerShell / pwsh 双版本兼容"
-    } elseif ($ExistingProfile -notmatch "mise activate") {
+    } elseif ($ExistingProfile -notmatch '(mise|MiseBin).*activate') {
         Add-Content -Path $PROFILE -Value $MiseHook
         Write-EnvSucc "已注入环境变量激活代码到 $PROFILE"
     }
@@ -350,15 +360,11 @@ if (Get-Command "npm" -ErrorAction SilentlyContinue) {
     Write-EnvSucc "已配置 NPM 镜像 -> https://registry.npmmirror.com/"
 }
 
-# Python Pip 镜像源
-$PipDir = "$env:APPDATA\\pip"
-if (-not (Test-Path $PipDir)) { New-Item -ItemType Directory -Path $PipDir -Force | Out-Null }
-@'
-[global]
-index-url = https://pypi.tuna.tsinghua.edu.cn/simple
-trusted-host = pypi.tuna.tsinghua.edu.cn
-'@ | Set-Content -Path "$PipDir\\pip.ini" -Encoding UTF8
-Write-EnvSucc "已配置 Pip 镜像 -> 清华大学 TUNA 镜像"
+# Python Pip: preserve all other settings.
+if (Get-Command "python" -ErrorAction SilentlyContinue) {
+    python -m pip config --user set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+    if ($LASTEXITCODE -ne 0) { Write-EnvWarn "Pip 不可用，跳过镜像配置" }
+}
 
 # Go GOPROXY
 if (Get-Command "go" -ErrorAction SilentlyContinue) {
@@ -369,6 +375,9 @@ if (Get-Command "go" -ErrorAction SilentlyContinue) {
 # Rust Cargo (rsproxy)
 $CargoDir = "$env:USERPROFILE\\.cargo"
 if (-not (Test-Path $CargoDir)) { New-Item -ItemType Directory -Path $CargoDir -Force | Out-Null }
+if ((Test-Path "$CargoDir\\config.toml") -or (Test-Path "$CargoDir\\config")) {
+    Write-EnvWarn "保留已有 Cargo 配置；请在 EnvHub 中合并镜像设置"
+} else {
 @'
 [source.crates-io]
 replace-with = 'rsproxy-sparse'
@@ -380,6 +389,7 @@ registry = "sparse+https://rsproxy.cn/index/"
 git-fetch-with-cli = true
 '@ | Set-Content -Path "$CargoDir\\config.toml" -Encoding UTF8
 Write-EnvSucc "已配置 Cargo 镜像 -> rsproxy.cn"
+}
 `
     : `Write-EnvStep "步骤 3/4: 跳过国内镜像源配置"`
 }
@@ -402,6 +412,7 @@ function Install-EnvTool {
 ${toolInstalls}
 
 & $MiseExe reshim
+if ($LASTEXITCODE -ne 0) { throw "Mise reshim failed" }
 
 ${options.includeMirrors ? `# Apply mirrors that require their runtime after installation.
 if (Get-Command "npm" -ErrorAction SilentlyContinue) {
@@ -410,8 +421,9 @@ if (Get-Command "npm" -ErrorAction SilentlyContinue) {
 if (Get-Command "go" -ErrorAction SilentlyContinue) {
     go env -w GOPROXY="https://goproxy.cn,direct" | Out-Null
 }
-if (Get-Command "scoop" -ErrorAction SilentlyContinue) {
-    scoop config SCOOP_REPO "https://github.com/ScoopInstaller/Scoop" | Out-Null
+if (Get-Command "python" -ErrorAction SilentlyContinue) {
+    python -m pip config --user set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+    if ($LASTEXITCODE -ne 0) { Write-EnvWarn "Pip mirror not applied" }
 }` : ''}
 
 # 5. 验证安装结果
@@ -444,7 +456,7 @@ export function generateWindowsBatchScript(
   return `@echo off
 chcp 65001 > nul
 title EnvHub - Windows 自动化环境部署
-setlocal EnableDelayedExpansion
+setlocal DisableDelayedExpansion
 
 echo ==============================================================================
 echo  EnvHub 环境一键部署启动器 (批处理自执行)
@@ -452,11 +464,12 @@ echo ===========================================================================
 echo.
 
 set "PS1_FILE=%~dp0setup_envhub.ps1"
+set "ENVHUB_BATCH=%~f0"
 
 rem 检查同级目录下是否存在 setup_envhub.ps1，若不存在则自动从内置脚本提取生成
 if not exist "%PS1_FILE%" (
     echo [*] 检测到 setup_envhub.ps1 不存在，正在自动提取并生成配套脚本...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$raw = [System.IO.File]::ReadAllText('%~f0', [System.Text.Encoding]::UTF8); $tag = '# __ENVHUB_POWERSHELL_START__'; $idx = $raw.IndexOf($tag); if ($idx -ge 0) { try { [System.IO.File]::WriteAllText('%PS1_FILE%', $raw.Substring($idx + $tag.Length).TrimStart(), [System.Text.Encoding]::UTF8); Write-Host '[OK] setup_envhub.ps1 脚本已成功生成！' -ForegroundColor Green } catch { Write-Host '[提示] 目录为只读，将直接在内存中执行内置 PowerShell 脚本。' -ForegroundColor Yellow } }"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$raw = [System.IO.File]::ReadAllText($env:ENVHUB_BATCH, [System.Text.Encoding]::UTF8); $tag = '# __ENVHUB_POWERSHELL_START__'; $idx = $raw.LastIndexOf($tag); if ($idx -ge 0) { try { [System.IO.File]::WriteAllText($env:PS1_FILE, $raw.Substring($idx + $tag.Length).TrimStart(), [System.Text.Encoding]::UTF8); Write-Host '[OK] setup_envhub.ps1 脚本已成功生成！' -ForegroundColor Green } catch { Write-Host '[提示] 目录为只读，将直接在内存中执行内置 PowerShell 脚本。' -ForegroundColor Yellow } }"
 )
 
 if exist "%PS1_FILE%" (
@@ -466,7 +479,7 @@ if exist "%PS1_FILE%" (
 ) else (
     echo [*] 正在以 Bypass 权限直接执行内置 PowerShell 部署任务...
     echo.
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$raw = [System.IO.File]::ReadAllText('%~f0', [System.Text.Encoding]::UTF8); $tag = '# __ENVHUB_POWERSHELL_START__'; $idx = $raw.IndexOf($tag); if ($idx -ge 0) { [ScriptBlock]::Create($raw.Substring($idx + $tag.Length).TrimStart()).Invoke() }"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$raw = [System.IO.File]::ReadAllText($env:ENVHUB_BATCH, [System.Text.Encoding]::UTF8); $tag = '# __ENVHUB_POWERSHELL_START__'; $idx = $raw.LastIndexOf($tag); if ($idx -ge 0) { [ScriptBlock]::Create($raw.Substring($idx + $tag.Length).TrimStart()).Invoke() }"
 )
 
 echo.
@@ -485,7 +498,7 @@ ${ps1Content}
  * Generate .mise.toml Configuration File
  */
 export function generateMiseTomlConfig(tools: ExportToolItem[]): string {
-  const selected = tools.filter((t) => t.checked && t.version && t.version !== 'system');
+  const selected = selectedTools(tools);
 
   const toolsToml = selected
     .map((t) => `  ${t.id} = "${t.version}"`)
@@ -500,7 +513,6 @@ export function generateMiseTomlConfig(tools: ExportToolItem[]): string {
 ${toolsToml}
 
 [settings]
-legacy_version_file = true
 experimental = true
 `;
 }

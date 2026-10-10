@@ -84,7 +84,7 @@ if ($MiseBin) {
             if (-not (Test-Path $pDir)) { New-Item -ItemType Directory -Path $pDir -Force | Out-Null }
             if (Test-Path $p) {
                 $existing = Get-Content $p -Raw -ErrorAction SilentlyContinue
-                if ($existing -notmatch "mise activate") {
+                if ($existing -notmatch '(mise|MiseBin).*activate') {
                     Add-Content -Path $p -Value $MiseHook
                     Write-EnvSucc "已注入 Mise 激活钩子 -> $p"
                 }
@@ -203,14 +203,10 @@ function Setup-Mirrors {
     }
 
     # Python Pip
-    $PipDir = "$env:APPDATA\pip"
-    if (-not (Test-Path $PipDir)) { New-Item -ItemType Directory -Path $PipDir -Force | Out-Null }
-    @'
-[global]
-index-url = https://pypi.tuna.tsinghua.edu.cn/simple
-trusted-host = pypi.tuna.tsinghua.edu.cn
-'@ | Set-Content -Path "$PipDir\pip.ini" -Encoding UTF8
-    Write-EnvSucc "Pip 镜像源 -> 清华大学开源镜像站"
+    if (Get-Command python -ErrorAction SilentlyContinue) {
+        python -m pip config --user set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+        if ($LASTEXITCODE -ne 0) { Write-EnvWarn "Pip configuration failed" }
+    }
 
     # Go Proxy
     if (Get-Command go -ErrorAction SilentlyContinue) {
@@ -221,6 +217,9 @@ trusted-host = pypi.tuna.tsinghua.edu.cn
     # Rust Crates
     $CargoDir = "$env:USERPROFILE\.cargo"
     if (-not (Test-Path $CargoDir)) { New-Item -ItemType Directory -Path $CargoDir -Force | Out-Null }
+    if ((Test-Path "$CargoDir\config.toml") -or (Test-Path "$CargoDir\config")) {
+        Write-EnvWarn "Existing Cargo configuration preserved; use EnvHub to merge mirror settings"
+    } else {
     @'
 [source.crates-io]
 replace-with = 'ustc'
@@ -228,6 +227,7 @@ replace-with = 'ustc'
 [source.ustc]
 registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
 '@ | Set-Content -Path "$CargoDir\config.toml" -Encoding UTF8
+    }
     Write-EnvSucc "Cargo 镜像源 -> 中科大 Crates.io 镜像"
 
     Write-EnvSucc "国内镜像源加速配置完成！"

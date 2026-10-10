@@ -18,6 +18,8 @@ export interface RuntimeTool {
   icon: string;
   officialSite: string;
   installedVersions: string[];
+  managedVersions?: string[];
+  detectionError?: string;
   activeVersion?: string;
   globalVersion?: string;
   availableVersions: string[];
@@ -91,5 +93,5 @@ export interface SystemStatus {
   miseInstalled: boolean;
   miseVersion?: string;
   misePath?: string;
-  packageManager: 'brew' | 'winget' | 'apt' | 'pacman' | 'none';
+  packageManager: 'brew' | 'winget' | 'scoop' | 'apt' | 'dnf' | 'pacman' | 'none';
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Sidebar, TabType } from './components/Sidebar';
 import { Header } from './components/Header';
 import { RuntimeManager } from './components/RuntimeManager';
@@ -13,6 +13,7 @@ import { ConfirmModal } from './components/ConfirmModal';
 import { ExportModal } from './components/ExportModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider, useToast } from './components/Toast';
+import { appendLogs } from './utils/logBuffer';
 import { api, isTauri } from './services/tauri';
 import { checkForUpdates, UpdateInfo, CURRENT_APP_VERSION } from './services/updater';
 import { 
@@ -87,35 +88,47 @@ const MainDashboard: React.FC = () => {
     updateInfo: null,
   });
 
-  // Load real data from host
-  const loadAllData = async (isManual = false) => {
-    setIsRefreshing(true);
-    try {
-      const [status, rList, pList, sTools, mList, hList] = await Promise.all([
-        api.getSystemStatus(),
-        api.getRuntimes(),
-        api.getProjects(),
-        api.getSystemTools(),
-        api.getMirrors(),
-        api.getHealthChecks()
-      ]);
+  const refreshFlight = useRef<Promise<void> | null>(null);
+  const refreshAgain = useRef(false);
+  const pendingLogs = useRef<string[]>([]);
+  const installBusy = useRef(false);
+  const appendInstallLog = (line: string) => {
+    pendingLogs.current = appendLogs(pendingLogs.current, [line]);
+  };
+  const flushInstallLogs = () => {
+    const batch = pendingLogs.current;
+    pendingLogs.current = [];
+    if (batch.length) setInstallModalState(prev => ({ ...prev, logs: appendLogs(prev.logs, batch) }));
+  };
+  useEffect(() => {
+    const timer = setInterval(flushInstallLogs, 100);
+    return () => clearInterval(timer);
+  }, []);
 
-      setSystemStatus(status);
-      setRuntimes(rList);
-      setProjects(pList);
-      setSystemTools(sTools);
-      setMirrors(mList);
-      setHealthChecks(hList);
-
-      if (isManual) {
-        toast.success('已同步最新环境状态');
-      }
-    } catch (err) {
-      console.error('Failed to load real environment data:', err);
-      toast.error(`读取系统环境数据失败: ${err}`);
-    } finally {
-      setIsRefreshing(false);
+  const loadAllData = (isManual = false, afterMutation = false): Promise<void> => {
+    if (refreshFlight.current) {
+      refreshAgain.current ||= afterMutation;
+      return refreshFlight.current;
     }
+    setIsRefreshing(true);
+    const flight = Promise.allSettled([
+      api.getSystemStatus().then(setSystemStatus),
+      api.getRuntimes().then(setRuntimes),
+      api.getProjects().then(setProjects),
+      api.getSystemTools().then(setSystemTools),
+      api.getMirrors().then(setMirrors),
+      api.getHealthChecks().then(setHealthChecks),
+    ]).then(results => {
+      const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+      if (failures.length) toast.error(`部分环境数据读取失败: ${failures.map(r => String(r.reason)).join('; ')}`);
+      else if (isManual) toast.success('已同步最新环境状态');
+    }).finally(() => {
+      refreshFlight.current = null;
+      setIsRefreshing(false);
+      if (refreshAgain.current) { refreshAgain.current = false; void loadAllData(); }
+    });
+    refreshFlight.current = flight;
+    return flight;
   };
 
   // Check for updates handler
@@ -147,9 +160,8 @@ const MainDashboard: React.FC = () => {
     // Auto check for updates on startup if enabled
     const shouldAutoCheck = localStorage.getItem('auto_check_update') !== 'false';
     if (shouldAutoCheck) {
-      setTimeout(() => {
-        handleCheckUpdate(false);
-      }, 1500);
+      const timer = setTimeout(() => { handleCheckUpdate(false); }, 1500);
+      return () => clearTimeout(timer);
     }
   }, []);
 
@@ -163,13 +175,7 @@ const MainDashboard: React.FC = () => {
       const ok = await api.setGlobalVersion(toolId, version);
       if (ok) {
         toast.success(`已将 ${toolId} 全局版本切换为 v${version}`);
-        setRuntimes((prev) =>
-          prev.map((t) =>
-            t.id === toolId
-              ? { ...t, globalVersion: version, activeVersion: version }
-              : t
-          )
-        );
+        await loadAllData(false, true);
       }
     } catch (err) {
       toast.error(`切换版本失败: ${err}`);
@@ -193,7 +199,7 @@ const MainDashboard: React.FC = () => {
       const ok = await api.uninstallVersion(toolId, version);
       if (ok) {
         toast.success(`已成功卸载 ${toolId} v${version}`);
-        loadAllData();
+        loadAllData(false, true);
       } else {
         toast.error(`卸载 ${toolId} v${version} 失败`);
       }
@@ -209,6 +215,9 @@ const MainDashboard: React.FC = () => {
       return;
     }
 
+    if (installBusy.current) return;
+    installBusy.current = true;
+    pendingLogs.current = [];
     setInstallModalState({
       isOpen: true,
       toolId,
@@ -221,12 +230,7 @@ const MainDashboard: React.FC = () => {
     api.startInstallRuntime(
       toolId,
       version,
-      (log) => {
-        setInstallModalState((prev) => ({
-          ...prev,
-          logs: [...prev.logs, log]
-        }));
-      },
+      appendInstallLog,
       (progress) => {
         setInstallModalState((prev) => ({
           ...prev,
@@ -234,6 +238,8 @@ const MainDashboard: React.FC = () => {
         }));
       }
     ).then((success) => {
+      installBusy.current = false;
+      flushInstallLogs();
       setInstallModalState((prev) => ({
         ...prev,
         status: success ? 'completed' : 'failed',
@@ -241,7 +247,7 @@ const MainDashboard: React.FC = () => {
       }));
       if (success) {
         toast.success(`成功安装 ${toolId} v${version}`);
-        loadAllData();
+        loadAllData(false, true);
       } else {
         toast.error(`安装 ${toolId} v${version} 失败，请查看日志详情`);
       }
@@ -281,7 +287,7 @@ const MainDashboard: React.FC = () => {
         toast.info('当前为浏览器预览模式');
         return;
       }
-      const ok = await api.setProjectToolVersion(projectId, toolId, version);
+      const ok = await api.setProjectToolVersion(projects.find(p => p.id === projectId)?.path || '', toolId, version);
       if (ok) {
         toast.success(`已将项目中的 ${toolId} 版本更新为 v${version}`);
         setProjects((prev) =>
@@ -308,6 +314,9 @@ const MainDashboard: React.FC = () => {
         toast.info('请在桌面端运行以调用系统包管理器');
         return;
       }
+      if (installBusy.current) return;
+      installBusy.current = true;
+      pendingLogs.current = [];
       setInstallModalState({
         isOpen: true,
         toolId: toolId,
@@ -318,12 +327,7 @@ const MainDashboard: React.FC = () => {
       });
       api.startInstallSystemTool(
         toolId,
-        (log) => {
-          setInstallModalState((prev) => ({
-            ...prev,
-            logs: [...prev.logs, log],
-          }));
-        },
+        appendInstallLog,
         (progress) => {
           setInstallModalState((prev) => ({
             ...prev,
@@ -331,6 +335,8 @@ const MainDashboard: React.FC = () => {
           }));
         }
       ).then((success) => {
+        installBusy.current = false;
+        flushInstallLogs();
         setInstallModalState((prev) => ({
           ...prev,
           status: success ? 'completed' : 'failed',
@@ -338,7 +344,7 @@ const MainDashboard: React.FC = () => {
         }));
         if (success) {
           toast.success(`成功安装系统工具: ${toolId}`);
-          loadAllData();
+          loadAllData(false, true);
         } else {
           toast.error(`安装 ${toolId} 失败，请查看日志详情`);
         }
@@ -350,18 +356,9 @@ const MainDashboard: React.FC = () => {
 
   // Handlers for Mirrors
   const handleSetMirror = async (tool: string, mirrorUrl: string) => {
-    try {
-      if (!isTauri()) {
-        toast.info('请在桌面端运行以写入系统配置');
-        return;
-      }
-      await api.setMirror(tool, mirrorUrl);
-      setMirrors((prev) =>
-        prev.map((m) => (m.tool === tool ? { ...m, currentMirror: mirrorUrl } : m))
-      );
-    } catch (err) {
-      toast.error(`配置镜像失败: ${err}`);
-    }
+    if (!isTauri()) throw new Error('请在桌面端运行以写入系统配置');
+    if (!await api.setMirror(tool, mirrorUrl)) throw new Error('配置未成功');
+    setMirrors(prev => prev.map(m => m.tool === tool ? { ...m, currentMirror: mirrorUrl } : m));
   };
 
   const handlePingMirrors = async () => {
@@ -381,7 +378,7 @@ const MainDashboard: React.FC = () => {
           }))
         }))
       );
-      toast.success('已完成镜像源测速');
+      toast.success('已完成 TCP 连接延迟检测；不代表镜像内容可用性或下载速度');
     } catch (err) {
       toast.error(`测速失败: ${err}`);
     } finally {
@@ -400,7 +397,7 @@ const MainDashboard: React.FC = () => {
       const ok = await api.autoFixHealthCheck(checkId);
       if (ok) {
         toast.success('已自动修复配置并同步系统环境！');
-        loadAllData();
+        loadAllData(false, true);
       }
     } catch (err) {
       toast.error(`自动修复失败: ${err}`);
@@ -415,6 +412,9 @@ const MainDashboard: React.FC = () => {
         toast.info('当前处于浏览器预览模式，请在桌面端运行。');
         return;
       }
+      if (installBusy.current) return;
+      installBusy.current = true;
+      pendingLogs.current = [];
       setInstallModalState({
         isOpen: true,
         toolId: 'mise',
@@ -423,13 +423,8 @@ const MainDashboard: React.FC = () => {
         progress: 10,
         status: 'running',
       });
-      api.startBootstrapMise(
-        (log) => {
-          setInstallModalState((prev) => ({
-            ...prev,
-            logs: [...prev.logs, log],
-          }));
-        },
+      await api.startBootstrapMise(
+        appendInstallLog,
         (progress) => {
           setInstallModalState((prev) => ({
             ...prev,
@@ -437,6 +432,8 @@ const MainDashboard: React.FC = () => {
           }));
         }
       ).then((success) => {
+        installBusy.current = false;
+        flushInstallLogs();
         setInstallModalState((prev) => ({
           ...prev,
           status: success ? 'completed' : 'failed',
@@ -444,7 +441,7 @@ const MainDashboard: React.FC = () => {
         }));
         if (success) {
           toast.success('Mise CLI 引擎已安装就绪！');
-          loadAllData();
+          loadAllData(false, true);
         } else {
           toast.error('Mise CLI 引擎部署失败，请查看日志详情');
         }
@@ -573,6 +570,7 @@ const MainDashboard: React.FC = () => {
               isBootstrapping={isBootstrappingMise}
               onCheckUpdate={handleCheckUpdate}
               isCheckingUpdate={isCheckingUpdate}
+              onPathSaved={() => loadAllData(false, true)}
             />
           )}
         </main>
@@ -586,13 +584,15 @@ const MainDashboard: React.FC = () => {
         logs={installModalState.logs}
         progress={installModalState.progress}
         status={installModalState.status}
+        canSetGlobal={!!runtimes.find(t => t.id === installModalState.toolId)?.managedVersions?.includes(installModalState.version)}
         onClose={() => setInstallModalState((prev) => ({ ...prev, isOpen: false }))}
         onCancel={async () => {
           const stopped = await api.cancelCurrentInstall();
+          if (!stopped) throw new Error('当前阶段不可取消，请等待操作完成');
           setInstallModalState((prev) => ({
             ...prev,
             status: 'failed',
-            logs: [...prev.logs, stopped ? '[cancel] 安装已由用户终止' : '[cancel] 未发现仍在运行的安装进程'],
+            logs: appendLogs(prev.logs, [stopped ? '[cancel] 已请求终止安装进程组' : '[cancel] 当前阶段没有可取消的进程']),
           }));
         }}
         onSetGlobal={() => {
@@ -602,7 +602,7 @@ const MainDashboard: React.FC = () => {
 
       {/* Software Update Modal */}
       <UpdateModal
-        isOpen={updateState.isOpen}
+        isOpen={updateState.isOpen && installModalState.status !== 'running'}
         updateInfo={updateState.updateInfo}
         onClose={() => setUpdateState((prev) => ({ ...prev, isOpen: false }))}
       />

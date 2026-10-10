@@ -22,6 +22,7 @@ interface InstallModalProps {
   onClose: () => void;
   onCancel: () => Promise<void>;
   onSetGlobal: () => void;
+  canSetGlobal: boolean;
 }
 
 export const InstallModal: React.FC<InstallModalProps> = ({
@@ -34,6 +35,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
   onClose,
   onCancel,
   onSetGlobal,
+  canSetGlobal,
 }) => {
   const terminalEndRef = useRef<HTMLDivElement>(null);
   const toast = useToast();
@@ -42,7 +44,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
 
   useEffect(() => {
     if (terminalEndRef.current) {
-      terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      terminalEndRef.current.scrollIntoView({ behavior: 'auto' });
     }
   }, [logs]);
 
@@ -72,12 +74,12 @@ export const InstallModal: React.FC<InstallModalProps> = ({
     setIsCanceling(true);
     try {
       await onCancel();
+      onClose();
     } catch (err) {
-      console.error('终止安装失败:', err);
+      toast.error(`终止安装失败: ${err}`);
     } finally {
       setIsCanceling(false);
       setShowCancelConfirm(false);
-      onClose();
     }
   };
 
@@ -180,7 +182,8 @@ export const InstallModal: React.FC<InstallModalProps> = ({
           </div>
 
           <div className="flex-1 overflow-y-auto space-y-1 select-text">
-            {logs.map((log, index) => {
+            {logs.length > 300 && <div className="text-slate-500">显示最近 300 行；复制可获取保留的最近 2000 行。</div>}
+            {logs.slice(-300).map((log, index) => {
               const isError = log.includes('error') || log.includes('Error') || log.includes('failed') || log.includes('✗');
               const isSuccess = log.includes('Successfully') || log.includes('completed') || log.includes('成功') || log.includes('✓');
               return (
@@ -220,7 +223,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
-            {status === 'completed' && (
+            {status === 'completed' && canSetGlobal && (
               <button
                 onClick={() => {
                   onSetGlobal();

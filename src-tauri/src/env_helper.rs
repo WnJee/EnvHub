@@ -7,6 +7,77 @@ use std::os::windows::process::CommandExt;
 
 pub const CREATE_NO_WINDOW: u32 = 0x08000000;
 static ACTIVE_INSTALL_PID: AtomicU32 = AtomicU32::new(0);
+static OPERATION: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
+pub struct OperationGuard {
+    _permit: tokio::sync::SemaphorePermit<'static>,
+}
+
+impl Drop for OperationGuard {
+    fn drop(&mut self) {
+        ACTIVE_INSTALL_PID.store(0, Ordering::SeqCst);
+    }
+}
+
+pub fn begin_operation() -> Result<OperationGuard, String> {
+    OPERATION
+        .try_acquire()
+        .map(|permit| OperationGuard { _permit: permit })
+        .map_err(|_| "Another installation or update is running".into())
+}
+
+pub fn validate_target(tool: &str, version: &str) -> Result<(), String> {
+    let valid = |s: &str| {
+        !s.is_empty()
+            && !s.starts_with('-')
+            && !s.contains("..")
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || ".-_+".contains(c))
+    };
+    if !valid(tool) || !valid(version) {
+        return Err("Invalid tool or version".into());
+    }
+    Ok(())
+}
+
+pub fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+pub async fn output_timeout(
+    cmd: &mut tokio::process::Command,
+    seconds: u64,
+) -> Result<std::process::Output, String> {
+    cmd.kill_on_drop(true)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let child = cmd.spawn().map_err(|e| e.to_string())?;
+    let pid = child.id();
+    let wait = child.wait_with_output();
+    tokio::pin!(wait);
+    match tokio::time::timeout(std::time::Duration::from_secs(seconds), &mut wait).await {
+        Ok(result) => result.map_err(|e| e.to_string()),
+        Err(_) => {
+            if let Some(pid) = pid {
+                let _ = kill_process_tree(pid);
+            }
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), &mut wait).await;
+            Err(format!("Command timed out after {seconds}s"))
+        }
+    }
+}
+
+pub fn checked_output(output: std::process::Output) -> Result<std::process::Output, String> {
+    if output.status.success() {
+        Ok(output)
+    } else {
+        Err(format!(
+            "Command failed ({}): {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
 
 pub fn set_active_install_pid(pid: Option<u32>) {
     ACTIVE_INSTALL_PID.store(pid.unwrap_or(0), Ordering::SeqCst);
@@ -19,20 +90,23 @@ pub fn clear_active_install_pid(pid: Option<u32>) {
 }
 
 pub fn cancel_active_install() -> Result<bool, String> {
-    let pid = ACTIVE_INSTALL_PID.swap(0, Ordering::SeqCst);
-    if pid == 0 { return Ok(false); }
+    let pid = ACTIVE_INSTALL_PID.load(Ordering::SeqCst);
+    if pid == 0 {
+        return Ok(false);
+    }
 
+    kill_process_tree(pid)
+}
+
+fn kill_process_tree(pid: u32) -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     let status = create_silent_command("taskkill")
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .status();
     #[cfg(not(target_os = "windows"))]
     let status = {
-        let _ = std::process::Command::new("pkill")
-            .args(["-9", "-P", &pid.to_string()])
-            .status();
-        std::process::Command::new("kill")
-            .args(["-9", &pid.to_string()])
+        std::process::Command::new("/bin/kill")
+            .args(["-KILL", "--", &format!("-{pid}")])
             .status()
     };
 
@@ -50,6 +124,7 @@ pub fn create_silent_command(program: &str) -> std::process::Command {
     {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
+    cmd.env("PATH", augmented_path());
     cmd
 }
 
@@ -58,10 +133,14 @@ pub fn create_silent_tokio_command(program: &str) -> tokio::process::Command {
     let resolved_program = resolve_windows_program(program);
     #[allow(unused_mut)]
     let mut cmd = tokio::process::Command::new(resolved_program);
+    #[cfg(unix)]
+    cmd.process_group(0);
+    cmd.kill_on_drop(true);
     #[cfg(target_os = "windows")]
     {
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
+    cmd.env("PATH", augmented_path());
     cmd
 }
 
@@ -70,7 +149,9 @@ pub fn create_silent_tokio_command(program: &str) -> tokio::process::Command {
 fn resolve_windows_program(program: &str) -> String {
     #[cfg(target_os = "windows")]
     {
-        if program.eq_ignore_ascii_case("powershell") || program.eq_ignore_ascii_case("powershell.exe") {
+        if program.eq_ignore_ascii_case("powershell")
+            || program.eq_ignore_ascii_case("powershell.exe")
+        {
             if let Ok(root) = env::var("SystemRoot") {
                 let candidate = PathBuf::from(root)
                     .join("System32")
@@ -88,6 +169,10 @@ fn resolve_windows_program(program: &str) -> String {
 
 /// Fix and augment the PATH environment variable for GUI apps on macOS / Windows / Linux
 pub fn fix_system_path() {
+    env::set_var("PATH", augmented_path());
+}
+
+fn augmented_path() -> std::ffi::OsString {
     let mut paths: Vec<PathBuf> = Vec::new();
 
     // 1. Highest priority: User version manager shims and local binaries
@@ -168,13 +253,14 @@ pub fn fix_system_path() {
         }
     }
 
-    if let Ok(new_path) = env::join_paths(paths) {
-        env::set_var("PATH", new_path);
-    }
+    env::join_paths(paths).unwrap_or_else(|_| env::var_os("PATH").unwrap_or_default())
 }
 
 /// Find the full path to the `mise` binary
 pub fn find_mise_binary() -> Option<PathBuf> {
+    if let Some(path) = custom_mise_path() {
+        return Some(path);
+    }
     // 1. Check user custom install locations first
     if let Some(home) = dirs::home_dir() {
         let candidates = [
@@ -229,16 +315,139 @@ pub fn find_mise_binary() -> Option<PathBuf> {
     None
 }
 
+fn settings_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|p| p.join("envhub/settings.json"))
+}
+
+fn custom_mise_path() -> Option<PathBuf> {
+    let content = std::fs::read_to_string(settings_path()?).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let path = PathBuf::from(value["misePath"].as_str()?);
+    path.is_file().then_some(path)
+}
+
+#[tauri::command]
+pub async fn save_mise_path(path: String) -> Result<String, String> {
+    let _operation = begin_operation()?;
+    let path = if let Some(suffix) = path.strip_prefix("~/") {
+        dirs::home_dir()
+            .ok_or("Cannot locate home directory")?
+            .join(suffix)
+    } else {
+        PathBuf::from(path)
+    };
+    let path = path.canonicalize().map_err(|e| e.to_string())?;
+    if !path.is_file() {
+        return Err("Mise path must be an executable file".into());
+    }
+    let output = checked_output(
+        output_timeout(
+            create_silent_tokio_command(&path.to_string_lossy()).arg("--version"),
+            5,
+        )
+        .await?,
+    )?;
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if version.is_empty() {
+        return Err("Executable did not report a Mise version".into());
+    }
+    let _guard = crate::config_file::CONFIG_LOCK
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let settings = settings_path().ok_or("Cannot locate settings")?;
+    let old = crate::config_file::read(&settings)?;
+    let mut value: serde_json::Value = if old.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(&old).map_err(|e| e.to_string())?
+    };
+    value["misePath"] = serde_json::json!(path);
+    crate::config_file::write(
+        &settings,
+        &serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?,
+    )?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// Check for command shims such as Scoop's `.cmd`/`.ps1` files.
 pub fn command_available(name: &str) -> bool {
-    let Ok(path) = env::var("PATH") else { return false; };
+    let path = augmented_path();
     for dir in env::split_paths(&path) {
-        if dir.join(name).is_file() { return true; }
+        if dir.join(name).is_file() {
+            return true;
+        }
         for suffix in [".exe", ".cmd", ".bat", ".ps1"] {
-            if dir.join(format!("{}{}", name, suffix)).is_file() { return true; }
+            if dir.join(format!("{}{}", name, suffix)).is_file() {
+                return true;
+            }
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn invalid_targets_rejected() {
+        for version in ["../outside", "-force", "1;exit", "$(id)"] {
+            assert!(validate_target("node", version).is_err());
+        }
+        assert!(validate_target("java", "temurin-21.0.2+13").is_ok());
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancellation_kills_descendants_and_releases_ownership() {
+        let operation = begin_operation().unwrap();
+        assert!(begin_operation().is_err());
+        let mut child = create_silent_tokio_command("sh")
+            .args(["-c", "sh -c 'sleep 30 & wait' & wait"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        set_active_install_pid(child.id());
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(cancel_active_install().unwrap());
+        assert!(!child.wait().await.unwrap().success());
+        // A living grandchild would retain the pipe and prevent EOF.
+        use tokio::io::AsyncReadExt;
+        let mut pipe = child.stdout.take().unwrap();
+        let mut bytes = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            pipe.read_to_end(&mut bytes),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        drop(operation);
+        assert!(begin_operation().is_ok());
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn command_timeout_is_bounded() {
+        let before = std::time::Instant::now();
+        assert!(output_timeout(
+            create_silent_tokio_command("sh").args(["-c", "sleep 30"]),
+            1
+        )
+        .await
+        .is_err());
+        assert!(before.elapsed() < std::time::Duration::from_secs(3));
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn nonzero_exit_propagates_stderr() {
+        let output = output_timeout(
+            create_silent_tokio_command("sh").args(["-c", "echo failed >&2; exit 7"]),
+            2,
+        )
+        .await
+        .unwrap();
+        let error = checked_output(output).unwrap_err();
+        assert!(error.contains("failed"));
+        assert!(error.contains('7'));
+    }
 }
 
 mod which {

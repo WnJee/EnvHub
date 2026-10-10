@@ -44,18 +44,18 @@ Unlike resource-heavy Electron apps, EnvHub achieves **minimal resource footprin
 > If you don't need or haven't installed the desktop client yet, you can directly use our **cross-platform interactive terminal setup wizard**.
 > It automatically checks and installs **Mise**, prompts and sets up host package managers (macOS **Homebrew** / Windows **Scoop**), and provides a clean **numeric menu** to install runtimes and configure high-speed mirrors with 1-click.
 
-### 1. One-Line Online Execution
+### 1. Download & Run in Terminal
 
-Run directly in your terminal without manual git cloning:
+Run directly without manual git cloning (downloads script and starts interactive wizard):
 
 - **🍎 macOS / 🐧 Linux**:
   ```bash
-  curl -fsSL https://raw.githubusercontent.com/WnJee/EnvHub/main/scripts/setup_interactive.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/WnJee/EnvHub/main/scripts/setup_interactive.sh -o setup_interactive.sh && bash setup_interactive.sh
   ```
 
 - **🪟 Windows (PowerShell)**:
   ```powershell
-  irm https://raw.githubusercontent.com/WnJee/EnvHub/main/scripts/setup_interactive.ps1 | iex
+  irm https://raw.githubusercontent.com/WnJee/EnvHub/main/scripts/setup_interactive.ps1 -OutFile setup_interactive.ps1; powershell -ExecutionPolicy Bypass -File .\setup_interactive.ps1
   ```
 
 ---

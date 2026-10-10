@@ -1,13 +1,8 @@
-pub mod env_helper;
 pub mod commands;
+pub mod config_file;
+pub mod env_helper;
 
-use commands::{
-    mise::*,
-    system::*,
-    mirrors::*,
-    projects::*,
-    updater::*,
-};
+use commands::{mirrors::*, mise::*, projects::*, system::*, updater::*};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -27,21 +22,19 @@ pub fn run() {
             cancel_current_install,
             bootstrap_mise_cli,
             open_terminal_for_runtime,
-
             // System commands
             get_system_status,
+            env_helper::save_mise_path,
             get_system_tools,
             test_system_tool,
             install_system_tool,
             get_health_checks,
             auto_fix_health_check,
             save_export_file,
-
             // Mirror commands
             get_mirrors,
             set_mirror,
             ping_mirrors,
-
             // Project commands
             get_projects,
             scan_and_add_project,
@@ -49,7 +42,6 @@ pub fn run() {
             set_project_tool_version,
             open_in_editor,
             open_in_terminal,
-
             // Updater & Browser commands
             open_url_in_browser,
             download_and_install_update,

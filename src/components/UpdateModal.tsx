@@ -236,6 +236,7 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
         updateInfo.latestVersion,
         (p) => setProgress(p)
       );
+      if (cancelledRef.current) return;
       setDownloadStatus('completed');
       setProgress(100);
     } catch (err: any) {
@@ -248,10 +249,12 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 
   const handleRelaunch = async () => {
     setIsRelaunching(true);
+    setErrorMsg('');
     try {
       await api.relaunchApp();
     } catch (err) {
       console.error('Relaunch error:', err);
+      setErrorMsg(`重启失败，请重试：${String(err)}`);
       setIsRelaunching(false);
     }
   };
@@ -268,17 +271,19 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
 
   const handleConfirmCancel = async () => {
     setIsCanceling(true);
-    cancelledRef.current = true;
     try {
-      await api.cancelCurrentInstall();
-    } catch (err) {
-      console.error('Cancel update install error:', err);
-    } finally {
-      setIsCanceling(false);
-      setShowCancelConfirm(false);
+      const stopped = await api.cancelCurrentInstall();
+      if (!stopped) throw new Error('当前处于文件替换阶段，不能取消；请等待完成');
+      cancelledRef.current = true;
       setDownloadStatus('idle');
       setProgress(0);
       onClose();
+    } catch (err) {
+      cancelledRef.current = false;
+      setErrorMsg(String(err));
+    } finally {
+      setIsCanceling(false);
+      setShowCancelConfirm(false);
     }
   };
 
@@ -290,14 +295,15 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   const getStepText = (p: number) => {
     if (p < 30) return '正在连接高速通道建立安全下载...';
     if (p < 90) return '正在应用内接收最新安装程序包...';
-    if (p < 100) return '正在进行就地覆盖与系统签名安全授权...';
+    if (p < 100) return '正在校验包格式并安全替换文件...';
     return '新版本已就绪，准备重启生效！';
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
       <div className="w-full max-w-2xl bg-[#0C1222] border border-slate-700/80 rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh] animate-in zoom-in-95 duration-150 relative">
-        {/* Secondary Cancellation Confirm Overlay */}
+        {errorMsg && downloadStatus !== 'error' && <div role="alert" className="px-5 pt-3 text-xs text-amber-400">{errorMsg}</div>}
+      {/* Secondary Cancellation Confirm Overlay */}
         {showCancelConfirm && (
           <div className="absolute inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in zoom-in-95 duration-150">
             <div className="max-w-md w-full bg-[#0C1222] border border-slate-700/90 rounded-2xl p-5 shadow-2xl space-y-4">

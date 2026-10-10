@@ -7,6 +7,11 @@ export const isTauri = () => {
 
 // Service API layer directly connected to Tauri Backend
 export const api = {
+  async saveMisePath(path: string): Promise<string> {
+    if (!isTauri()) throw new Error('请在桌面客户端中设置');
+    const { invoke } = await import('@tauri-apps/api/core');
+    return invoke<string>('save_mise_path', { path });
+  },
   // System Status
   async getSystemStatus(): Promise<SystemStatus> {
     if (isTauri()) {
@@ -15,6 +20,7 @@ export const api = {
         return await invoke<SystemStatus>('get_system_status');
       } catch (err) {
         console.warn('get_system_status invoke error:', err);
+        throw err;
       }
     }
     return {
@@ -35,6 +41,7 @@ export const api = {
         return await invoke<RuntimeTool[]>('get_runtimes');
       } catch (err) {
         console.warn('get_runtimes invoke error:', err);
+        throw err;
       }
     }
     return [];
@@ -47,6 +54,7 @@ export const api = {
         return await invoke<string[]>('get_remote_versions', { toolId });
       } catch (err) {
         console.warn('get_remote_versions invoke error:', err);
+        throw err;
       }
     }
     return [];
@@ -83,14 +91,14 @@ export const api = {
         let unlistenLog: (() => void) | null = null;
         let unlistenProgress: (() => void) | null = null;
 
-        unlistenLog = await listen<string>('install-log', (event) => {
-          onLog(event.payload);
-        });
-        unlistenProgress = await listen<number>('install-progress', (event) => {
-          onProgress(event.payload);
-        });
-
         try {
+          unlistenLog = await listen<string>('install-log', (event) => {
+            onLog(event.payload);
+          });
+          unlistenProgress = await listen<number>('install-progress', (event) => {
+            onProgress(event.payload);
+          });
+
           return await invoke<boolean>('install_runtime_version', { toolId, version });
         } finally {
           if (unlistenLog) unlistenLog();
@@ -123,6 +131,7 @@ export const api = {
         return await invoke<ProjectEnv[]>('get_projects');
       } catch (err) {
         console.warn('get_projects invoke error:', err);
+        throw err;
       }
     }
     return [];
@@ -136,10 +145,10 @@ export const api = {
     throw new Error('未运行在 Tauri 桌面环境中');
   },
 
-  async setProjectToolVersion(projectId: string, toolId: string, version: string): Promise<boolean> {
+  async setProjectToolVersion(projectPath: string, toolId: string, version: string): Promise<boolean> {
     if (isTauri()) {
       const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<boolean>('set_project_tool_version', { projectId, toolId, version });
+      return await invoke<boolean>('set_project_tool_version', { projectPath, toolId, version });
     }
     throw new Error('未运行在 Tauri 桌面环境中');
   },
@@ -184,6 +193,7 @@ export const api = {
         return await invoke<SystemTool[]>('get_system_tools');
       } catch (err) {
         console.warn('get_system_tools invoke error:', err);
+        throw err;
       }
     }
     return [];
@@ -210,14 +220,14 @@ export const api = {
         let unlistenLog: (() => void) | null = null;
         let unlistenProgress: (() => void) | null = null;
 
-        unlistenLog = await listen<string>('install-log', (event) => {
-          onLog(event.payload);
-        });
-        unlistenProgress = await listen<number>('install-progress', (event) => {
-          onProgress(event.payload);
-        });
-
         try {
+          unlistenLog = await listen<string>('install-log', (event) => {
+            onLog(event.payload);
+          });
+          unlistenProgress = await listen<number>('install-progress', (event) => {
+            onProgress(event.payload);
+          });
+
           return await invoke<boolean>('install_system_tool', { toolId });
         } finally {
           if (unlistenLog) unlistenLog();
@@ -244,6 +254,7 @@ export const api = {
         return await invoke<MirrorConfig[]>('get_mirrors');
       } catch (err) {
         console.warn('get_mirrors invoke error:', err);
+        throw err;
       }
     }
     return [];
@@ -273,6 +284,7 @@ export const api = {
         return await invoke<EnvHealthCheck[]>('get_health_checks');
       } catch (err) {
         console.warn('get_health_checks invoke error:', err);
+        throw err;
       }
     }
     return [];
@@ -299,14 +311,14 @@ export const api = {
         let unlistenLog: (() => void) | null = null;
         let unlistenProgress: (() => void) | null = null;
 
-        unlistenLog = await listen<string>('install-log', (event) => {
-          onLog(event.payload);
-        });
-        unlistenProgress = await listen<number>('install-progress', (event) => {
-          onProgress(event.payload);
-        });
-
         try {
+          unlistenLog = await listen<string>('install-log', (event) => {
+            onLog(event.payload);
+          });
+          unlistenProgress = await listen<number>('install-progress', (event) => {
+            onProgress(event.payload);
+          });
+
           return await invoke<boolean>('bootstrap_mise_cli');
         } finally {
           if (unlistenLog) unlistenLog();

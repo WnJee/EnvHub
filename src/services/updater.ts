@@ -11,7 +11,7 @@ export interface UpdateInfo {
   downloadUrl?: string;
 }
 
-export const CURRENT_APP_VERSION = '0.2.18';
+export const CURRENT_APP_VERSION = '0.2.19';
 
 /**
  * Compare two semver strings (e.g. "0.1.1" vs "0.1.0")
@@ -99,7 +99,7 @@ export async function checkForUpdates(currentVersion: string = CURRENT_APP_VERSI
     try {
       const response = await fetch('https://api.github.com/repos/WnJee/EnvHub/releases/latest', {
         headers: { Accept: 'application/vnd.github.v3+json' },
-        cache: 'no-cache',
+        cache: 'no-cache', signal: AbortSignal.timeout(10000),
       });
       if (response.ok) {
         const data = await response.json();
@@ -116,13 +116,13 @@ export async function checkForUpdates(currentVersion: string = CURRENT_APP_VERSI
           const isLinux = userAgent.includes('linux');
 
           if (isWindows) {
-            const winAsset = data.assets.find((a: any) => a.name.endsWith('.exe') || a.name.endsWith('.msi'));
+            const winAsset = data.assets.find((a: any) => a.name.endsWith('_x64-setup.exe'));
             if (winAsset) downloadUrl = winAsset.browser_download_url;
           } else if (isLinux) {
-            const linuxAsset = data.assets.find((a: any) => a.name.endsWith('.AppImage') || a.name.endsWith('.deb'));
+            const linuxAsset = data.assets.find((a: any) => a.name.endsWith('_amd64.AppImage'));
             if (linuxAsset) downloadUrl = linuxAsset.browser_download_url;
           } else {
-            const macAsset = data.assets.find((a: any) => a.name.endsWith('.dmg'));
+            const macAsset = data.assets.find((a: any) => a.name.endsWith('_universal.dmg'));
             if (macAsset) downloadUrl = macAsset.browser_download_url;
           }
         }
@@ -135,7 +135,7 @@ export async function checkForUpdates(currentVersion: string = CURRENT_APP_VERSI
   // Tier 3: Fallback to GitHub releases.atom (Zero rate limits, always works)
   if (!latestVer) {
     try {
-      const response = await fetch('https://github.com/WnJee/EnvHub/releases.atom', { cache: 'no-cache' });
+      const response = await fetch('https://github.com/WnJee/EnvHub/releases.atom', { cache: 'no-cache', signal: AbortSignal.timeout(10000) });
       if (response.ok) {
         const xml = await response.text();
         const entryMatch = xml.match(/<entry>([\s\S]*?)<\/entry>/);
@@ -169,7 +169,7 @@ export async function checkForUpdates(currentVersion: string = CURRENT_APP_VERSI
   // Tier 4: Fallback to GitHub latest release redirect URL
   if (!latestVer) {
     try {
-      const res = await fetch('https://github.com/WnJee/EnvHub/releases/latest', { method: 'HEAD' });
+      const res = await fetch('https://github.com/WnJee/EnvHub/releases/latest', { method: 'HEAD', signal: AbortSignal.timeout(10000) });
       if (res.url && res.url.includes('/releases/tag/')) {
         const tag = res.url.split('/releases/tag/')[1].split('/')[0];
         latestVer = tag.replace(/^v/, '');
@@ -180,13 +180,7 @@ export async function checkForUpdates(currentVersion: string = CURRENT_APP_VERSI
     }
   }
 
-  if (!latestVer) {
-    return {
-      hasUpdate: false,
-      latestVersion: currentVersion,
-      currentVersion,
-    };
-  }
+  if (!latestVer) throw new Error('无法连接更新服务');
 
   if (!downloadUrl) {
     downloadUrl = getPlatformDownloadUrl(latestVer);

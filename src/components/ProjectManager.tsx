@@ -44,7 +44,7 @@ export const ProjectManager: React.FC<ProjectManagerProps> = ({
 
   const handleOpenVSCode = async (path: string) => {
     try {
-      await api.openInEditor(path);
+      if (!await api.openInEditor(path)) throw new Error('编辑器启动失败');
       toast.success(`已在 VS Code 中打开: ${path}`);
     } catch (err) {
       toast.error(`打开编辑器失败: ${err}`);
@@ -53,7 +53,7 @@ export const ProjectManager: React.FC<ProjectManagerProps> = ({
 
   const handleOpenTerminal = async (path: string) => {
     try {
-      await api.openInTerminal(path);
+      if (!await api.openInTerminal(path)) throw new Error('终端启动失败');
       toast.success(`已在终端打开目录: ${path}`);
     } catch (err) {
       toast.error(`打开终端失败: ${err}`);

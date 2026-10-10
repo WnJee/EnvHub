@@ -22,6 +22,7 @@ interface SettingsModalProps {
   isBootstrapping: boolean;
   onCheckUpdate: (manual: boolean) => Promise<void>;
   isCheckingUpdate: boolean;
+  onPathSaved: () => Promise<void>;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -30,20 +31,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isBootstrapping,
   onCheckUpdate,
   isCheckingUpdate,
+  onPathSaved,
 }) => {
   const [customPath, setCustomPath] = useState(systemStatus.misePath || '');
-  const [autoSyncEnv, setAutoSyncEnv] = useState(true);
   const [autoCheckUpdate, setAutoCheckUpdate] = useState(() => {
     return localStorage.getItem('auto_check_update') !== 'false';
   });
   const toast = useToast();
 
-  const handleSavePath = () => {
+  const [savingPath, setSavingPath] = useState(false);
+  const handleSavePath = async () => {
     if (!customPath.trim()) {
       toast.warning('请输入有效的 Mise 二进制文件路径');
       return;
     }
-    toast.success(`已保存 Mise 路径配置: ${customPath}`);
+    setSavingPath(true);
+    try {
+      const saved = await api.saveMisePath(customPath.trim());
+      setCustomPath(saved);
+      await onPathSaved();
+      toast.success(`Mise 路径已验证并保存: ${saved}`);
+    } catch (error) { toast.error(`保存失败: ${error}`); }
+    finally { setSavingPath(false); }
   };
 
   const handleToggleAutoCheckUpdate = (checked: boolean) => {
@@ -179,6 +188,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             />
             <button
               onClick={handleSavePath}
+              disabled={savingPath}
               className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors"
             >
               保存并测试
@@ -217,37 +227,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           运行策略与环境同步
         </h3>
 
-        <div className="space-y-2">
-          <label className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
-            <div>
-              <div className="text-xs font-semibold text-slate-200">启动时自动同步 Shell 环境变量</div>
-              <div className="text-[10px] text-slate-400">
-                通过登录 Shell 读取环境变量，避免桌面客户端 PATH 缺失
-              </div>
-            </div>
-            <input
-              type="checkbox"
-              checked={autoSyncEnv}
-              onChange={(e) => setAutoSyncEnv(e.target.checked)}
-              className="w-4 h-4 rounded text-blue-600 bg-slate-900 border-slate-700"
-            />
-          </label>
-
-          <label className="flex items-center justify-between p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
-            <div>
-              <div className="text-xs font-semibold text-slate-200">切换版本时自动向 Shell RC 注入 Shims</div>
-              <div className="text-[10px] text-slate-400">
-                保持终端命令行中 node / python / go 命令与桌面客户端设置完全一致
-              </div>
-            </div>
-            <input
-              type="checkbox"
-              defaultChecked
-              onChange={() => toast.inDev('实时 Shims 动态重载')}
-              className="w-4 h-4 rounded text-blue-600 bg-slate-900 border-slate-700"
-            />
-          </label>
-        </div>
+        <p className="text-xs text-slate-400 leading-relaxed">
+          客户端为子进程补齐常用工具目录，不会在启动或读取状态时修改 Shell 配置。
+          如需持久化终端激活，请在“环境健康自检”中明确执行修复；已有配置会保留备份。
+        </p>
       </div>
 
       {/* About Box */}

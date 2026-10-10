@@ -13,7 +13,7 @@ import { useToast } from './Toast';
 
 interface MirrorManagerProps {
   mirrors: MirrorConfig[];
-  onSetMirror: (tool: string, mirrorUrl: string) => void;
+  onSetMirror: (tool: string, mirrorUrl: string) => Promise<void>;
   onPingMirrors: () => Promise<void>;
   isPinging: boolean;
 }
@@ -39,10 +39,10 @@ export const MirrorManager: React.FC<MirrorManagerProps> = ({
 
   const currentMirrorConfig = mirrors.find((m) => m.tool === activeTab) || mirrors[0];
 
-  const handleApply = (tool: string, url: string, name: string) => {
+  const handleApply = async (tool: string, url: string, name: string) => {
     try {
-      onSetMirror(tool, url);
-      toast.success(`已将 ${tool.toUpperCase()} 镜像源切换为「${name}」`);
+      await onSetMirror(tool, url);
+      toast.success(tool === 'docker' ? 'Docker 配置已写入；请在 Docker Desktop 中确认并重启引擎' : `已将 ${tool.toUpperCase()} 镜像源切换为「${name}」`);
     } catch (err) {
       toast.error(`写入配置失败: ${err}`);
     }
@@ -86,7 +86,7 @@ export const MirrorManager: React.FC<MirrorManagerProps> = ({
           className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-semibold shadow-lg shadow-amber-500/20 flex items-center gap-2 transition-all shrink-0"
         >
           <Activity className={`w-3.5 h-3.5 ${isPinging ? 'animate-spin' : ''}`} />
-          {isPinging ? '正在测速中...' : '一键测速全部镜像'}
+          {isPinging ? '正在测速中...' : '检测全部镜像 TCP 延迟'}
         </button>
       </div>
 

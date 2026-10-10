@@ -5,6 +5,10 @@
 # ==============================================================================
 
 set -u
+set -o pipefail
+
+# Keep user input separate from the script pipe (curl | bash).
+exec 3</dev/tty || { echo "Interactive terminal required" >&2; exit 1; }
 
 # --- 颜色与样式配置 ---
 BOLD="\033[1m"
@@ -24,7 +28,7 @@ log_step() { echo -e "\n${BOLD}${CYAN}==> $*${NC}"; }
 
 press_enter() {
   echo ""
-  read -r -p "按回车键继续..." _
+  read -r -p "按回车键继续..." _ <&3 || exit 0
 }
 
 # --- 环境变量初始化与加载 ---
@@ -131,7 +135,7 @@ ensure_package_manager() {
 
     log_warn "未检测到 macOS 系统包管理器 (Homebrew)。"
     echo -e "${YELLOW}Homebrew 是 macOS 上安装 Git、数据库与开发中间件所必需的底层工具包管理器。${NC}"
-    read -r -p "是否立即安装 Homebrew？[Y/n]: " choice
+    read -r -p "是否立即安装 Homebrew？[Y/n]: " choice <&3 || exit 0
     choice="${choice:-Y}"
 
     if [[ "$choice" =~ ^[Yy]$ ]]; then
@@ -210,7 +214,7 @@ browse_remote_versions() {
   "$MISE_BIN" ls-remote "$tool_id" 2>/dev/null | grep -E '^[0-9]' | tail -n 25 | column -c 80 2>/dev/null || "$MISE_BIN" ls-remote "$tool_id" 2>/dev/null | tail -n 20
   echo "------------------------------------------------------"
   echo "提示: 可以输入上方列出的具体版本号 (如 24.9.0 或 3.14.2)，或输入 'latest' 获取最新版"
-  read -r -p "请输入您要安装的 ${name} 版本号 (直接回车取消): " custom_v
+  read -r -p "请输入您要安装的 ${name} 版本号 (直接回车取消): " custom_v <&3 || exit 0
   if [ -n "$custom_v" ]; then
     install_runtime "$tool_id" "$custom_v" "$name"
   fi
@@ -228,12 +232,11 @@ setup_mirrors() {
 
   # Python Pip
   if command -v pip3 &>/dev/null || command -v pip &>/dev/null; then
-    mkdir -p "$HOME/.pip"
-    cat > "$HOME/.pip/pip.conf" << 'EOF'
-[global]
-index-url = https://pypi.tuna.tsinghua.edu.cn/simple
-trusted-host = pypi.tuna.tsinghua.edu.cn
-EOF
+    if command -v pip3 &>/dev/null; then
+      pip3 config --user set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple || return 1
+    else
+      pip config --user set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple || return 1
+    fi
     log_succ "Pip 镜像源 -> 清华大学开源镜像站"
   fi
 
@@ -245,7 +248,7 @@ EOF
 
   # Rust Crates
   mkdir -p "$HOME/.cargo"
-  if [ ! -f "$HOME/.cargo/config.toml" ]; then
+  if [ ! -e "$HOME/.cargo/config.toml" ] && [ ! -e "$HOME/.cargo/config" ]; then
     cat > "$HOME/.cargo/config.toml" << 'EOF'
 [source.crates-io]
 replace-with = 'ustc'
@@ -292,7 +295,7 @@ menu_node() {
     echo "  5) 🔍 浏览远程可用版本列表 / 自定义输入版本号"
     echo "  0) 返回主菜单"
     echo -e "${CYAN}------------------------------------------------------${NC}"
-    read -r -p "请输入选择 [0-5]: " sub_choice
+    read -r -p "请输入选择 [0-5]: " sub_choice <&3 || exit 0
     case "$sub_choice" in
       1) install_runtime "node" "lts" "Node.js"; break ;;
       2) install_runtime "node" "latest" "Node.js"; break ;;
@@ -318,7 +321,7 @@ menu_python() {
     echo "  5) 🔍 浏览远程可用版本列表 / 自定义输入版本号"
     echo "  0) 返回主菜单"
     echo -e "${CYAN}------------------------------------------------------${NC}"
-    read -r -p "请输入选择 [0-5]: " sub_choice
+    read -r -p "请输入选择 [0-5]: " sub_choice <&3 || exit 0
     case "$sub_choice" in
       1) install_runtime "python" "latest" "Python"; break ;;
       2) install_runtime "python" "3.14" "Python"; break ;;
@@ -344,7 +347,7 @@ menu_go() {
     echo "  5) 🔍 浏览远程可用版本列表 / 自定义输入版本号"
     echo "  0) 返回主菜单"
     echo -e "${CYAN}------------------------------------------------------${NC}"
-    read -r -p "请输入选择 [0-5]: " sub_choice
+    read -r -p "请输入选择 [0-5]: " sub_choice <&3 || exit 0
     case "$sub_choice" in
       1) install_runtime "go" "latest" "Go"; break ;;
       2) install_runtime "go" "1.27" "Go"; break ;;
@@ -371,7 +374,7 @@ menu_java() {
     echo "  6) 🔍 浏览远程可用版本列表 / 自定义发行版 (如 corretto / temurin)"
     echo "  0) 返回主菜单"
     echo -e "${CYAN}------------------------------------------------------${NC}"
-    read -r -p "请输入选择 [0-6]: " sub_choice
+    read -r -p "请输入选择 [0-6]: " sub_choice <&3 || exit 0
     case "$sub_choice" in
       1) install_runtime "java" "lts" "Java JDK"; break ;;
       2) install_runtime "java" "25" "Java JDK"; break ;;
@@ -396,7 +399,7 @@ menu_rust() {
     echo "  3) 🔍 浏览远程可用版本列表 / 自定义输入版本号"
     echo "  0) 返回主菜单"
     echo -e "${CYAN}------------------------------------------------------${NC}"
-    read -r -p "请输入选择 [0-3]: " sub_choice
+    read -r -p "请输入选择 [0-3]: " sub_choice <&3 || exit 0
     case "$sub_choice" in
       1) install_runtime "rust" "latest" "Rust"; break ;;
       2) install_runtime "rust" "nightly" "Rust"; break ;;
@@ -468,7 +471,7 @@ main_menu() {
     echo ""
     echo "   0) 🚪 退出脚本 (Exit)"
     echo -e "${CYAN}======================================================================${NC}"
-    read -r -p "请输入对应的功能数字 [0-9]: " main_choice
+    read -r -p "请输入对应的功能数字 [0-9]: " main_choice <&3 || exit 0
 
     case "$main_choice" in
       1) menu_node ;;

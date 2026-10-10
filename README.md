@@ -46,18 +46,18 @@ EnvHub 实现了**极低资源占用（常驻内存 ~30-50MB，安装包 ~10MB�
 > 如果您无需或暂未安装图形化客户端，可以直接使用我们提供的**全平台交互式终端引导脚本**。
 > 脚本将全自动检测并安装 **Mise**、按需安装宿主包管理器（macOS **Homebrew** / Windows **Scoop**），并通过友好的**数字键盘选择菜单**一键安装和配置主流语言环境与国内镜像加速。
 
-### 1. 一键在线执行命令
+### 1. 终端一键下载并运行
 
-无需手动克隆代码仓库，直接在终端/命令行中粘贴以下命令即可快速启动：
+无需手动克隆代码仓库，直接在终端/命令行中粘贴以下命令下载并启动向导：
 
 - **🍎 macOS / 🐧 Linux**：
   ```bash
-  curl -fsSL https://raw.githubusercontent.com/WnJee/EnvHub/main/scripts/setup_interactive.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/WnJee/EnvHub/main/scripts/setup_interactive.sh -o setup_interactive.sh && bash setup_interactive.sh
   ```
 
 - **🪟 Windows (PowerShell)**：
   ```powershell
-  irm https://raw.githubusercontent.com/WnJee/EnvHub/main/scripts/setup_interactive.ps1 | iex
+  irm https://raw.githubusercontent.com/WnJee/EnvHub/main/scripts/setup_interactive.ps1 -OutFile setup_interactive.ps1; powershell -ExecutionPolicy Bypass -File .\setup_interactive.ps1
   ```
 
 ---

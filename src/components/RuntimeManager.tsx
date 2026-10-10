@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { RuntimeTool } from '../types';
 import { 
   Check, 
@@ -34,67 +34,8 @@ export const formatVersion = (v: string | undefined | null): string => {
   return trimmed.startsWith('v') ? trimmed : `v${trimmed}`;
 };
 
-export const filterLatestMinorVersions = (versions: string[], toolId?: string): string[] => {
-  const groups = new Map<string, { patch: number; raw: string; isPrerelease: boolean }>();
-
-  for (const v of versions) {
-    const trimmed = v.trim();
-    if (!trimmed) continue;
-
-    let clean = trimmed.replace(/^v/, '');
-    if (toolId === 'python' || toolId === 'ruby' || toolId === 'java') {
-      // Official pure numeric versions only (e.g. 3.13.2, 3.4.2, 21.0.2)
-      if (!/^\d+\.\d+(\.\d+)*$/.test(clean)) continue;
-    } else {
-      // General tools: must start with digit semver
-      if (!/^\d+(\.\d+)+/.test(clean)) continue;
-    }
-
-    const base = clean.split('-')[0].split('+')[0];
-    const parts = base.split('.');
-    if (parts.length >= 2) {
-      const maj = parseInt(parts[0], 10);
-      const min = parseInt(parts[1], 10);
-      if (!isNaN(maj) && !isNaN(min)) {
-        const key = `${maj}.${min}`;
-        const rawPatch = parts[2] || '0';
-        const isPrerelease = clean.includes('-') || clean.includes('rc') || clean.includes('beta') || clean.includes('alpha');
-        const match = rawPatch.match(/^\d+/);
-        const patchNum = match ? parseInt(match[0], 10) : 0;
-
-        const existing = groups.get(key);
-        if (!existing) {
-          groups.set(key, { patch: patchNum, raw: base, isPrerelease });
-        } else {
-          if (existing.isPrerelease && !isPrerelease) {
-            groups.set(key, { patch: patchNum, raw: base, isPrerelease });
-          } else if (!isPrerelease && !existing.isPrerelease) {
-            if (patchNum >= existing.patch) {
-              groups.set(key, { patch: patchNum, raw: base, isPrerelease });
-            }
-          } else if (isPrerelease && existing.isPrerelease) {
-            if (patchNum >= existing.patch) {
-              groups.set(key, { patch: patchNum, raw: base, isPrerelease });
-            }
-          }
-        }
-      }
-    }
-  }
-
-  const sorted = Array.from(groups.entries())
-    .map(([key, val]) => {
-      const [maj, min] = key.split('.').map(Number);
-      return { maj, min, patch: val.patch, raw: val.raw };
-    })
-    .sort((a, b) => {
-      if (a.maj !== b.maj) return b.maj - a.maj;
-      if (a.min !== b.min) return b.min - a.min;
-      return b.patch - a.patch;
-    })
-    .map((item) => item.raw);
-
-  return sorted;
+export const filterLatestMinorVersions = (versions: string[], _toolId?: string): string[] => {
+  return [...new Set(versions.map(v => v.trim()).filter(Boolean))];
 };
 
 export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
@@ -132,6 +73,24 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
   );
 
   const currentTool = runtimes.find((t) => t.id === selectedToolId) || runtimes[0];
+
+  const [remoteVersions, setRemoteVersions] = useState<Record<string, string[]>>({});
+  const [remoteError, setRemoteError] = useState('');
+  const [remoteLoading, setRemoteLoading] = useState(false);
+  const [remoteLimit, setRemoteLimit] = useState(100);
+  const currentId = currentTool?.id;
+  useEffect(() => {
+    if (!currentId) return;
+    let stale = false;
+    setRemoteLimit(100);
+    setRemoteLoading(true);
+    setRemoteError('');
+    api.getAvailableVersions(currentId).then(versions => {
+      if (!stale) setRemoteVersions(prev => ({ ...prev, [currentId]: versions }));
+    }).catch(error => { if (!stale) setRemoteError(String(error)); })
+      .finally(() => { if (!stale) setRemoteLoading(false); });
+    return () => { stale = true; };
+  }, [currentId]);
 
   if (!currentTool) {
     return (
@@ -195,7 +154,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
   };
 
   // Filter and deduplicate remote versions to only highest patch per minor release
-  const curatedVersions = filterLatestMinorVersions(currentTool.availableVersions || [], currentTool.id);
+  const curatedVersions = filterLatestMinorVersions([...currentTool.installedVersions, ...(remoteVersions[currentTool.id] || currentTool.availableVersions || [])], currentTool.id);
   const availableVersionsFiltered = curatedVersions.filter((v) => {
     if (remoteSearch && !v.toLowerCase().includes(remoteSearch.toLowerCase())) {
       return false;
@@ -221,6 +180,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
 
   return (
     <div className="flex-1 flex overflow-hidden bg-[#090D16]">
+      {(remoteLoading || remoteError) && <div role="status" className="absolute bottom-2 right-4 z-10 max-w-md rounded bg-slate-900 px-3 py-1 text-xs text-slate-400">{remoteLoading ? '正在加载所选语言的远端版本…' : `远端版本加载失败，可重选语言重试：${remoteError}`}</div>}
       {/* Left List of Runtimes */}
       <div className="w-56 sm:w-64 border-r border-slate-800/80 bg-[#0B1120]/60 flex flex-col shrink-0">
         <div className="p-3.5 border-b border-slate-800/80 flex items-center justify-between">
@@ -359,7 +319,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
           {currentTool.installedVersions.length === 0 ? (
             <div className="p-6 rounded-2xl bg-slate-900/40 border border-dashed border-slate-800 text-center">
               <ShieldAlert className="w-7 h-7 text-amber-400/80 mx-auto mb-2" />
-              <p className="text-xs sm:text-sm font-medium text-slate-300">本机尚未安装 {currentTool.name}</p>
+              <p className="text-xs sm:text-sm font-medium text-slate-300">{currentTool.detectionError ? `检测失败：${currentTool.detectionError}` : `本机尚未安装 ${currentTool.name}`}</p>
               <p className="text-[11px] text-slate-400 mt-0.5">可在下方版本仓库中选择或输入版本号进行安装</p>
             </div>
           ) : (
@@ -393,7 +353,8 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
 
                       <button
                         onClick={() => onUninstallVersion(currentTool.id, ver)}
-                        title="卸载此版本"
+                        disabled={!currentTool.managedVersions?.includes(ver)}
+                        title={currentTool.managedVersions?.includes(ver) ? '卸载此版本' : '此版本由系统包管理器管理'}
                         className="p-1 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -404,6 +365,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
                       {!isGlobal ? (
                         <button
                           onClick={() => onSetGlobalVersion(currentTool.id, ver)}
+                          disabled={!currentTool.managedVersions?.includes(ver)}
                           className="flex-1 px-3 py-1 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/30 text-xs font-semibold transition-all flex items-center justify-center gap-1"
                         >
                           <Zap className="w-3 h-3" /> 设为主用版本
@@ -416,7 +378,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
 
                       <button
                         onClick={() => handleQuickTerminalCheck(currentTool.id, ver)}
-                        disabled={testingVersion === ver}
+                        disabled={testingVersion === ver || !currentTool.managedVersions?.includes(ver)}
                         title="在系统终端中快捷打开并验证此版本"
                         className="px-2.5 py-1 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-medium border border-slate-700/60 transition-all flex items-center gap-1 shrink-0"
                       >
@@ -506,6 +468,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
           </div>
 
           {/* Remote Version Table / Cards */}
+          {availableVersionsFiltered.length > remoteLimit && <button className="text-xs text-blue-400" onClick={() => setRemoteLimit(n => n + 100)}>显示更多版本（{remoteLimit}/{availableVersionsFiltered.length}）</button>}
           {availableVersionsFiltered.length === 0 ? (
             <div className="p-5 rounded-xl bg-slate-900/30 border border-slate-800/80 text-center">
               <AlertCircle className="w-5 h-5 text-slate-400 mx-auto mb-1.5" />
@@ -515,7 +478,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2 max-h-64 overflow-y-auto p-1">
-              {availableVersionsFiltered.map((ver) => {
+              {availableVersionsFiltered.slice(0, remoteLimit).map((ver) => {
                 const isInstalled = currentTool.installedVersions.includes(ver);
                 const isLts = ver.includes('20.') || ver.includes('18.') || ver.includes('21.') || ver.includes('3.12');
 

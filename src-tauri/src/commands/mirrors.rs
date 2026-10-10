@@ -1,10 +1,10 @@
+use crate::env_helper;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::time::Instant;
 use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
-use crate::env_helper;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MirrorOption {
@@ -28,7 +28,6 @@ pub struct MirrorConfig {
 #[tauri::command]
 pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
     // Refresh PATH so GUI launches can see Node/Go installed after login.
-    env_helper::fix_system_path();
     let mut configs = Vec::new();
 
     // Platform package-manager mirrors lead the list because they affect
@@ -40,30 +39,63 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
         tool: "brew".to_string(),
         current_mirror: "https://mirrors.ustc.edu.cn/homebrew-bottles".to_string(),
         options: vec![
-            MirrorOption { name: "中国科学技术大学 USTC 镜像".to_string(), url: "https://mirrors.ustc.edu.cn/homebrew-bottles".to_string(), ping: None, is_default: Some(true) },
-            MirrorOption { name: "清华大学 TUNA 镜像".to_string(), url: "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "阿里云 Homebrew 镜像".to_string(), url: "https://mirrors.aliyun.com/homebrew/homebrew-bottles".to_string(), ping: None, is_default: None },
+            MirrorOption {
+                name: "中国科学技术大学 USTC 镜像".to_string(),
+                url: "https://mirrors.ustc.edu.cn/homebrew-bottles".to_string(),
+                ping: None,
+                is_default: Some(true),
+            },
+            MirrorOption {
+                name: "清华大学 TUNA 镜像".to_string(),
+                url: "https://mirrors.tuna.tsinghua.edu.cn/homebrew-bottles".to_string(),
+                ping: None,
+                is_default: None,
+            },
+            MirrorOption {
+                name: "阿里云 Homebrew 镜像".to_string(),
+                url: "https://mirrors.aliyun.com/homebrew/homebrew-bottles".to_string(),
+                ping: None,
+                is_default: None,
+            },
         ],
     });
 
     #[cfg(target_os = "windows")]
     {
-        let scoop_current = env_helper::create_silent_command("powershell")
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "scoop config SCOOP_REPO"])
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "https://github.com/ScoopInstaller/Scoop".to_string());
+        let scoop_current = env_helper::output_timeout(
+            env_helper::create_silent_tokio_command("powershell").args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "scoop config SCOOP_REPO",
+            ]),
+            8,
+        )
+        .await
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "https://github.com/ScoopInstaller/Scoop".to_string());
         configs.push(MirrorConfig {
             id: "scoop".to_string(),
             name: "Scoop (Windows)".to_string(),
             tool: "scoop".to_string(),
             current_mirror: scoop_current,
             options: vec![
-                MirrorOption { name: "Scoop 官方 GitHub 仓库".to_string(), url: "https://github.com/ScoopInstaller/Scoop".to_string(), ping: None, is_default: Some(true) },
-                MirrorOption { name: "Gitee Scoop 镜像".to_string(), url: "https://gitee.com/scoop-installer/scoop".to_string(), ping: None, is_default: None },
+                MirrorOption {
+                    name: "Scoop 官方 GitHub 仓库".to_string(),
+                    url: "https://github.com/ScoopInstaller/Scoop".to_string(),
+                    ping: None,
+                    is_default: Some(true),
+                },
+                MirrorOption {
+                    name: "Gitee Scoop 镜像".to_string(),
+                    url: "https://gitee.com/scoop-installer/scoop".to_string(),
+                    ping: None,
+                    is_default: None,
+                },
             ],
         });
     }
@@ -86,7 +118,12 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
         }
     }
     if npm_current == "https://registry.npmjs.org" {
-        if let Ok(out) = env_helper::create_silent_command("npm").args(["config", "get", "registry"]).output() {
+        if let Ok(out) = env_helper::output_timeout(
+            env_helper::create_silent_tokio_command("npm").args(["config", "get", "registry"]),
+            8,
+        )
+        .await
+        {
             if out.status.success() {
                 let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 if !s.is_empty() && s.starts_with("http") {
@@ -102,10 +139,30 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
         tool: "npm".to_string(),
         current_mirror: npm_current,
         options: vec![
-            MirrorOption { name: "淘宝 NPM 镜像 (npmmirror)".to_string(), url: "https://registry.npmmirror.com".to_string(), ping: None, is_default: Some(true) },
-            MirrorOption { name: "腾讯云 NPM 镜像".to_string(), url: "https://mirrors.cloud.tencent.com/npm/".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "华为云 NPM 镜像".to_string(), url: "https://repo.huaweicloud.com/repository/npm/".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "官方源 (npmjs.org)".to_string(), url: "https://registry.npmjs.org".to_string(), ping: None, is_default: None },
+            MirrorOption {
+                name: "淘宝 NPM 镜像 (npmmirror)".to_string(),
+                url: "https://registry.npmmirror.com".to_string(),
+                ping: None,
+                is_default: Some(true),
+            },
+            MirrorOption {
+                name: "腾讯云 NPM 镜像".to_string(),
+                url: "https://mirrors.cloud.tencent.com/npm/".to_string(),
+                ping: None,
+                is_default: None,
+            },
+            MirrorOption {
+                name: "华为云 NPM 镜像".to_string(),
+                url: "https://repo.huaweicloud.com/repository/npm/".to_string(),
+                ping: None,
+                is_default: None,
+            },
+            MirrorOption {
+                name: "官方源 (npmjs.org)".to_string(),
+                url: "https://registry.npmjs.org".to_string(),
+                ping: None,
+                is_default: None,
+            },
         ],
     });
 
@@ -139,16 +196,41 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
         tool: "pip".to_string(),
         current_mirror: pip_current,
         options: vec![
-            MirrorOption { name: "清华大学 TUNA 镜像".to_string(), url: "https://pypi.tuna.tsinghua.edu.cn/simple".to_string(), ping: None, is_default: Some(true) },
-            MirrorOption { name: "阿里云开源镜像".to_string(), url: "https://mirrors.aliyun.com/pypi/simple/".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "豆瓣开源镜像".to_string(), url: "https://pypi.doubanio.com/simple/".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "官方 PyPI 源".to_string(), url: "https://pypi.org/simple".to_string(), ping: None, is_default: None },
+            MirrorOption {
+                name: "清华大学 TUNA 镜像".to_string(),
+                url: "https://pypi.tuna.tsinghua.edu.cn/simple".to_string(),
+                ping: None,
+                is_default: Some(true),
+            },
+            MirrorOption {
+                name: "阿里云开源镜像".to_string(),
+                url: "https://mirrors.aliyun.com/pypi/simple/".to_string(),
+                ping: None,
+                is_default: None,
+            },
+            MirrorOption {
+                name: "豆瓣开源镜像".to_string(),
+                url: "https://pypi.doubanio.com/simple/".to_string(),
+                ping: None,
+                is_default: None,
+            },
+            MirrorOption {
+                name: "官方 PyPI 源".to_string(),
+                url: "https://pypi.org/simple".to_string(),
+                ping: None,
+                is_default: None,
+            },
         ],
     });
 
     // 3. Go: Query `go env GOPROXY`
     let mut go_current = "https://proxy.golang.org,direct".to_string();
-    if let Ok(out) = env_helper::create_silent_command("go").args(["env", "GOPROXY"]).output() {
+    if let Ok(out) = env_helper::output_timeout(
+        env_helper::create_silent_tokio_command("go").args(["env", "GOPROXY"]),
+        8,
+    )
+    .await
+    {
         if out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if !s.is_empty() {
@@ -163,19 +245,31 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
         tool: "go".to_string(),
         current_mirror: go_current,
         options: vec![
-            MirrorOption { name: "Goproxy 中国 (七牛云)".to_string(), url: "https://goproxy.cn,direct".to_string(), ping: None, is_default: Some(true) },
-            MirrorOption { name: "阿里云 Go 模块代理".to_string(), url: "https://mirrors.aliyun.com/goproxy/,direct".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "官方 proxy.golang.org".to_string(), url: "https://proxy.golang.org,direct".to_string(), ping: None, is_default: None },
+            MirrorOption {
+                name: "Goproxy 中国 (七牛云)".to_string(),
+                url: "https://goproxy.cn,direct".to_string(),
+                ping: None,
+                is_default: Some(true),
+            },
+            MirrorOption {
+                name: "阿里云 Go 模块代理".to_string(),
+                url: "https://mirrors.aliyun.com/goproxy/,direct".to_string(),
+                ping: None,
+                is_default: None,
+            },
+            MirrorOption {
+                name: "官方 proxy.golang.org".to_string(),
+                url: "https://proxy.golang.org,direct".to_string(),
+                ping: None,
+                is_default: None,
+            },
         ],
     });
 
     // 4. Cargo: Read ~/.cargo/config.toml
     let mut cargo_current = "https://github.com/rust-lang/crates.io-index".to_string();
     if let Some(home) = dirs::home_dir() {
-        let cargo_paths = [
-            home.join(".cargo/config.toml"),
-            home.join(".cargo/config"),
-        ];
+        let cargo_paths = [home.join(".cargo/config.toml"), home.join(".cargo/config")];
         for path in cargo_paths {
             if path.exists() {
                 if let Ok(content) = fs::read_to_string(&path) {
@@ -184,7 +278,9 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
                     } else if content.contains("ustc") {
                         cargo_current = "https://mirrors.ustc.edu.cn/crates.io-index".to_string();
                     } else if content.contains("tuna") {
-                        cargo_current = "https://mirrors.tuna.tsinghua.edu.cn/git/crates.io-index.git".to_string();
+                        cargo_current =
+                            "https://mirrors.tuna.tsinghua.edu.cn/git/crates.io-index.git"
+                                .to_string();
                     }
                 }
             }
@@ -197,10 +293,30 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
         tool: "cargo".to_string(),
         current_mirror: cargo_current,
         options: vec![
-            MirrorOption { name: "字节跳动 rsproxy (推荐)".to_string(), url: "https://rsproxy.cn".to_string(), ping: None, is_default: Some(true) },
-            MirrorOption { name: "中国科学技术大学 USTC".to_string(), url: "https://mirrors.ustc.edu.cn/crates.io-index".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "清华大学 Crates 镜像".to_string(), url: "https://mirrors.tuna.tsinghua.edu.cn/git/crates.io-index.git".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "官方 crates.io".to_string(), url: "https://github.com/rust-lang/crates.io-index".to_string(), ping: None, is_default: None },
+            MirrorOption {
+                name: "字节跳动 rsproxy (推荐)".to_string(),
+                url: "https://rsproxy.cn".to_string(),
+                ping: None,
+                is_default: Some(true),
+            },
+            MirrorOption {
+                name: "中国科学技术大学 USTC".to_string(),
+                url: "https://mirrors.ustc.edu.cn/crates.io-index".to_string(),
+                ping: None,
+                is_default: None,
+            },
+            MirrorOption {
+                name: "清华大学 Crates 镜像".to_string(),
+                url: "https://mirrors.tuna.tsinghua.edu.cn/git/crates.io-index.git".to_string(),
+                ping: None,
+                is_default: None,
+            },
+            MirrorOption {
+                name: "官方 crates.io".to_string(),
+                url: "https://github.com/rust-lang/crates.io-index".to_string(),
+                ping: None,
+                is_default: None,
+            },
         ],
     });
 
@@ -227,10 +343,30 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
         tool: "docker".to_string(),
         current_mirror: docker_current,
         options: vec![
-            MirrorOption { name: "DaoCloud 镜像加速".to_string(), url: "https://docker.m.daocloud.io".to_string(), ping: None, is_default: Some(true) },
-            MirrorOption { name: "中科大 Docker 镜像源".to_string(), url: "https://docker.mirrors.ustc.edu.cn".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "腾讯云容器镜像代理".to_string(), url: "https://mirror.ccs.tencentyun.com".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "Docker 官方 Docker Hub".to_string(), url: "https://registry-1.docker.io".to_string(), ping: None, is_default: None },
+            MirrorOption {
+                name: "DaoCloud 镜像加速".to_string(),
+                url: "https://docker.m.daocloud.io".to_string(),
+                ping: None,
+                is_default: Some(true),
+            },
+            MirrorOption {
+                name: "中科大 Docker 镜像源".to_string(),
+                url: "https://docker.mirrors.ustc.edu.cn".to_string(),
+                ping: None,
+                is_default: None,
+            },
+            MirrorOption {
+                name: "腾讯云容器镜像代理".to_string(),
+                url: "https://mirror.ccs.tencentyun.com".to_string(),
+                ping: None,
+                is_default: None,
+            },
+            MirrorOption {
+                name: "Docker 官方 Docker Hub".to_string(),
+                url: "https://registry-1.docker.io".to_string(),
+                ping: None,
+                is_default: None,
+            },
         ],
     });
 
@@ -242,9 +378,24 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
             tool: "nuget".to_string(),
             current_mirror: "https://nuget.cdn.azure.cn/v3/index.json".to_string(),
             options: vec![
-                MirrorOption { name: "Azure 中国 CDN 镜像 (推荐)".to_string(), url: "https://nuget.cdn.azure.cn/v3/index.json".to_string(), ping: None, is_default: Some(true) },
-                MirrorOption { name: "华为云 NuGet 镜像".to_string(), url: "https://repo.huaweicloud.com/repository/nuget/v3/index.json".to_string(), ping: None, is_default: None },
-                MirrorOption { name: "NuGet.org 官方源".to_string(), url: "https://api.nuget.org/v3/index.json".to_string(), ping: None, is_default: None },
+                MirrorOption {
+                    name: "Azure 中国 CDN 镜像 (推荐)".to_string(),
+                    url: "https://nuget.cdn.azure.cn/v3/index.json".to_string(),
+                    ping: None,
+                    is_default: Some(true),
+                },
+                MirrorOption {
+                    name: "华为云 NuGet 镜像".to_string(),
+                    url: "https://repo.huaweicloud.com/repository/nuget/v3/index.json".to_string(),
+                    ping: None,
+                    is_default: None,
+                },
+                MirrorOption {
+                    name: "NuGet.org 官方源".to_string(),
+                    url: "https://api.nuget.org/v3/index.json".to_string(),
+                    ping: None,
+                    is_default: None,
+                },
             ],
         });
     }
@@ -270,10 +421,30 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
         tool: "maven".to_string(),
         current_mirror: maven_current,
         options: vec![
-            MirrorOption { name: "阿里云 Maven 仓库 (aliyun)".to_string(), url: "https://maven.aliyun.com/repository/public".to_string(), ping: None, is_default: Some(true) },
-            MirrorOption { name: "华为云 Maven 镜像".to_string(), url: "https://repo.huaweicloud.com/repository/maven/".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "腾讯云 Maven 镜像".to_string(), url: "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "Apache 官方中央仓库".to_string(), url: "https://repo.maven.apache.org/maven2".to_string(), ping: None, is_default: None },
+            MirrorOption {
+                name: "阿里云 Maven 仓库 (aliyun)".to_string(),
+                url: "https://maven.aliyun.com/repository/public".to_string(),
+                ping: None,
+                is_default: Some(true),
+            },
+            MirrorOption {
+                name: "华为云 Maven 镜像".to_string(),
+                url: "https://repo.huaweicloud.com/repository/maven/".to_string(),
+                ping: None,
+                is_default: None,
+            },
+            MirrorOption {
+                name: "腾讯云 Maven 镜像".to_string(),
+                url: "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/".to_string(),
+                ping: None,
+                is_default: None,
+            },
+            MirrorOption {
+                name: "Apache 官方中央仓库".to_string(),
+                url: "https://repo.maven.apache.org/maven2".to_string(),
+                ping: None,
+                is_default: None,
+            },
         ],
     });
 
@@ -284,10 +455,30 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
         tool: "composer".to_string(),
         current_mirror: "https://mirrors.aliyun.com/composer/".to_string(),
         options: vec![
-            MirrorOption { name: "阿里云 Composer 镜像".to_string(), url: "https://mirrors.aliyun.com/composer/".to_string(), ping: None, is_default: Some(true) },
-            MirrorOption { name: "腾讯云 Composer 镜像".to_string(), url: "https://mirrors.cloud.tencent.com/composer/".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "华为云 Composer 镜像".to_string(), url: "https://repo.huaweicloud.com/repository/php/".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "官方 Packagist 源".to_string(), url: "https://repo.packagist.org".to_string(), ping: None, is_default: None },
+            MirrorOption {
+                name: "阿里云 Composer 镜像".to_string(),
+                url: "https://mirrors.aliyun.com/composer/".to_string(),
+                ping: None,
+                is_default: Some(true),
+            },
+            MirrorOption {
+                name: "腾讯云 Composer 镜像".to_string(),
+                url: "https://mirrors.cloud.tencent.com/composer/".to_string(),
+                ping: None,
+                is_default: None,
+            },
+            MirrorOption {
+                name: "华为云 Composer 镜像".to_string(),
+                url: "https://repo.huaweicloud.com/repository/php/".to_string(),
+                ping: None,
+                is_default: None,
+            },
+            MirrorOption {
+                name: "官方 Packagist 源".to_string(),
+                url: "https://repo.packagist.org".to_string(),
+                ping: None,
+                is_default: None,
+            },
         ],
     });
 
@@ -298,179 +489,371 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
         tool: "rubygems".to_string(),
         current_mirror: "https://gems.ruby-china.com".to_string(),
         options: vec![
-            MirrorOption { name: "Ruby China 镜像 (推荐)".to_string(), url: "https://gems.ruby-china.com".to_string(), ping: None, is_default: Some(true) },
-            MirrorOption { name: "清华大学 RubyGems 镜像".to_string(), url: "https://mirrors.tuna.tsinghua.edu.cn/rubygems/".to_string(), ping: None, is_default: None },
-            MirrorOption { name: "官方 rubygems.org".to_string(), url: "https://rubygems.org".to_string(), ping: None, is_default: None },
+            MirrorOption {
+                name: "Ruby China 镜像 (推荐)".to_string(),
+                url: "https://gems.ruby-china.com".to_string(),
+                ping: None,
+                is_default: Some(true),
+            },
+            MirrorOption {
+                name: "清华大学 RubyGems 镜像".to_string(),
+                url: "https://mirrors.tuna.tsinghua.edu.cn/rubygems/".to_string(),
+                ping: None,
+                is_default: None,
+            },
+            MirrorOption {
+                name: "官方 rubygems.org".to_string(),
+                url: "https://rubygems.org".to_string(),
+                ping: None,
+                is_default: None,
+            },
         ],
     });
 
+    if let Some(home) = dirs::home_dir() {
+        for config in &mut configs {
+            if config.tool == "brew" {
+                config.current_mirror = crate::config_file::read(&brew_path(&home))?
+                    .lines()
+                    .find_map(|l| {
+                        l.split_once('=')
+                            .filter(|(k, _)| k.trim() == "HOMEBREW_BOTTLE_DOMAIN")
+                            .map(|(_, v)| v.trim().to_string())
+                    })
+                    .unwrap_or_else(|| "https://ghcr.io/v2/homebrew/core".into());
+            } else if config.tool == "pip" {
+                let text = crate::config_file::read(&pip_path(&home))?;
+                if let Some(value) = text.lines().find_map(|l| {
+                    l.split_once('=')
+                        .filter(|(k, _)| k.trim() == "index-url")
+                        .map(|(_, v)| v.trim().to_string())
+                }) {
+                    config.current_mirror = value;
+                }
+            } else if config.tool == "cargo" {
+                let text = crate::config_file::read(&cargo_path(&home))?;
+                let doc = text
+                    .parse::<toml_edit::DocumentMut>()
+                    .map_err(|e| e.to_string())?;
+                let source = doc.get("source");
+                let replacement = source
+                    .and_then(|v| v.get("crates-io"))
+                    .and_then(|v| v.get("replace-with"))
+                    .and_then(|v| v.as_str());
+                let registry = replacement
+                    .and_then(|name| source.and_then(|v| v.get(name)))
+                    .and_then(|v| v.get("registry"))
+                    .and_then(|v| v.as_str());
+                config.current_mirror = match registry {
+                    Some("sparse+https://rsproxy.cn/index/") => "https://rsproxy.cn".into(),
+                    Some(url) => url.into(),
+                    None if replacement.is_none() => {
+                        "https://github.com/rust-lang/crates.io-index".into()
+                    }
+                    None => "Unknown Cargo source replacement".into(),
+                };
+            } else if ["nuget", "composer", "rubygems"].contains(&config.tool.as_str()) {
+                config.current_mirror = "Unknown (verify with the package manager)".into();
+            }
+        }
+    }
     Ok(configs)
+}
+
+fn cargo_path(home: &std::path::Path) -> std::path::PathBuf {
+    let dir = std::env::var_os("CARGO_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| home.join(".cargo"));
+    if dir.join("config").exists() {
+        dir.join("config")
+    } else {
+        dir.join("config.toml")
+    }
+}
+
+fn pip_path(home: &std::path::Path) -> std::path::PathBuf {
+    if let Some(path) = std::env::var_os("PIP_CONFIG_FILE") {
+        return path.into();
+    }
+    if cfg!(windows) {
+        dirs::config_dir()
+            .unwrap_or_else(|| home.join("AppData/Roaming"))
+            .join("pip/pip.ini")
+    } else if cfg!(target_os = "macos") && home.join("Library/Application Support/pip").is_dir() {
+        home.join("Library/Application Support/pip/pip.conf")
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| home.join(".config"))
+            .join("pip/pip.conf")
+    }
+}
+
+fn brew_path(home: &std::path::Path) -> std::path::PathBuf {
+    home.join(".homebrew/brew.env")
+}
+
+fn replace_setting(content: &str, section: Option<&str>, key: &str, value: &str) -> String {
+    let mut lines = Vec::new();
+    let mut inside = section.is_none();
+    let mut found_section = section.is_none();
+    let mut written = false;
+    for line in content.lines() {
+        let trim = line.trim();
+        if trim.starts_with('[') && trim.ends_with(']') {
+            if inside && !written {
+                lines.push(format!("{key} = {value}"));
+                written = true;
+            }
+            inside = section == Some(trim.trim_matches(['[', ']']));
+            found_section |= inside;
+        }
+        if inside
+            && trim
+                .split_once('=')
+                .map(|(k, _)| k.trim() == key)
+                .unwrap_or(false)
+        {
+            if !written {
+                lines.push(format!("{key} = {value}"));
+                written = true;
+            }
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+    if !written {
+        if !found_section {
+            lines.push(format!("[{}]", section.unwrap_or_default()));
+        }
+        lines.push(format!("{key} = {value}"));
+    }
+    lines.join("\n") + "\n"
+}
+
+fn update_cargo(doc: &mut toml_edit::DocumentMut, url: &str) -> Result<(), String> {
+    if !doc.contains_key("source") {
+        doc["source"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    if doc["source"].as_table_like().is_none() {
+        return Err("Invalid Cargo source table".into());
+    }
+    if url == "https://github.com/rust-lang/crates.io-index" {
+        if let Some(source) = doc["source"]
+            .get_mut("crates-io")
+            .and_then(|v| v.as_table_like_mut())
+        {
+            source.remove("replace-with");
+        }
+    } else {
+        let registry = match url {
+            "https://rsproxy.cn" => "sparse+https://rsproxy.cn/index/".to_string(),
+            "https://mirrors.ustc.edu.cn/crates.io-index" => {
+                "https://mirrors.ustc.edu.cn/crates.io-index".to_string()
+            }
+            "https://mirrors.tuna.tsinghua.edu.cn/git/crates.io-index.git" => url.to_string(),
+            _ => return Err("Unsupported Cargo mirror".into()),
+        };
+        doc["source"]["crates-io"]["replace-with"] = toml_edit::value("envhub-mirror");
+        // A fresh owned table prevents a stale replace-with chain from forming a cycle.
+        let mut table = toml_edit::Table::new();
+        table["registry"] = toml_edit::value(registry);
+        doc["source"]["envhub-mirror"] = toml_edit::Item::Table(table);
+    }
+    Ok(())
+}
+
+fn update_maven(content: &str, url: &str) -> Result<String, String> {
+    use xmltree::{Element, XMLNode};
+    let mut root = if content.trim().is_empty() {
+        Element::new("settings")
+    } else {
+        Element::parse(content.as_bytes()).map_err(|e| e.to_string())?
+    };
+    if root.name != "settings" {
+        return Err("Invalid Maven settings root".into());
+    }
+    if root.get_child("mirrors").is_none() {
+        root.children
+            .push(XMLNode::Element(Element::new("mirrors")));
+    }
+    let mirrors = root.get_mut_child("mirrors").ok_or("Missing mirrors")?;
+    mirrors.children.retain(|n| {
+        !n.as_element()
+            .map(|m| {
+                m.get_child("id").and_then(Element::get_text).as_deref() == Some("envhub-mirror")
+            })
+            .unwrap_or(false)
+    });
+    let mut mirror = Element::new("mirror");
+    for (name, text) in [
+        ("id", "envhub-mirror"),
+        ("mirrorOf", "central"),
+        ("url", url),
+    ] {
+        let mut child = Element::new(name);
+        child.children.push(XMLNode::Text(text.into()));
+        mirror.children.push(XMLNode::Element(child));
+    }
+    mirrors.children.insert(0, XMLNode::Element(mirror));
+    let mut bytes = Vec::new();
+    root.write_with_config(
+        &mut bytes,
+        xmltree::EmitterConfig::new().perform_indent(true),
+    )
+    .map_err(|e| e.to_string())?;
+    String::from_utf8(bytes).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn set_mirror(tool: String, mirror_url: String) -> Result<bool, String> {
-    let home = dirs::home_dir().ok_or_else(|| "无法获取用户主目录".to_string())?;
-
-    match tool.as_str() {
+    if !mirror_url.starts_with("https://")
+        || mirror_url
+            .chars()
+            .any(|c| c.is_control() || c == '\'' || c == '"')
+    {
+        return Err("Mirror must be a valid HTTPS URL".into());
+    }
+    let home = dirs::home_dir().ok_or("Cannot locate home directory")?;
+    let command: Option<(&str, Vec<String>)> = match tool.as_str() {
+        "go" => Some((
+            "go",
+            vec!["env".into(), "-w".into(), format!("GOPROXY={mirror_url}")],
+        )),
+        "scoop" => Some((
+            "powershell",
+            vec![
+                "-NoProfile".into(),
+                "-Command".into(),
+                format!("scoop config SCOOP_REPO '{mirror_url}'; if (-not $?) {{ exit 1 }}"),
+            ],
+        )),
+        "nuget" => Some((
+            "dotnet",
+            vec![
+                "nuget".into(),
+                "update".into(),
+                "source".into(),
+                "EnvHub-Mirror".into(),
+                "--source".into(),
+                mirror_url.clone(),
+            ],
+        )),
+        "composer" => Some((
+            "composer",
+            vec![
+                "config".into(),
+                "-g".into(),
+                "repos.packagist".into(),
+                "composer".into(),
+                mirror_url.clone(),
+            ],
+        )),
+        "rubygems" => Some((
+            "gem",
+            vec!["sources".into(), "--add".into(), mirror_url.clone()],
+        )),
+        _ => None,
+    };
+    if let Some((program, args)) = command {
+        let mut output = env_helper::output_timeout(
+            env_helper::create_silent_tokio_command(program)
+                .current_dir(&home)
+                .args(&args),
+            20,
+        )
+        .await?;
+        if tool == "nuget" && !output.status.success() {
+            output = env_helper::output_timeout(
+                env_helper::create_silent_tokio_command("dotnet").args([
+                    "nuget",
+                    "add",
+                    "source",
+                    &mirror_url,
+                    "--name",
+                    "EnvHub-Mirror",
+                ]),
+                20,
+            )
+            .await?;
+        }
+        env_helper::checked_output(output)?;
+        return Ok(true);
+    }
+    if tool == "cargo" {
+        crate::config_file::edit_toml(&cargo_path(&home), |doc| update_cargo(doc, &mirror_url))?;
+        return Ok(true);
+    }
+    let _guard = crate::config_file::CONFIG_LOCK
+        .lock()
+        .map_err(|e| e.to_string())?;
+    let (path, content) = match tool.as_str() {
         "npm" => {
-            let npmrc = home.join(".npmrc");
-            let mut lines = Vec::new();
-            if npmrc.exists() {
-                if let Ok(content) = fs::read_to_string(&npmrc) {
-                    for line in content.lines() {
-                        if !line.trim().starts_with("registry=") && !line.trim().starts_with("registry =") {
-                            lines.push(line.to_string());
-                        }
-                    }
-                }
-            }
-            lines.push(format!("registry={}", mirror_url));
-            fs::write(npmrc, lines.join("\n") + "\n").map_err(|e| format!("写入 ~/.npmrc 失败: {}", e))?;
+            let path = home.join(".npmrc");
+            let content = replace_setting(
+                &crate::config_file::read(&path)?,
+                None,
+                "registry",
+                &mirror_url,
+            );
+            (path, content)
         }
         "pip" => {
-            let host = mirror_url
-                .trim_start_matches("https://")
-                .trim_start_matches("http://")
-                .split('/')
-                .next()
-                .unwrap_or("pypi.tuna.tsinghua.edu.cn");
-
-            let content = format!("[global]\nindex-url = {}\ntrusted-host = {}\n", mirror_url, host);
-
-            // 1. User home .pip/pip.conf
-            let pip_dir = home.join(".pip");
-            let _ = fs::create_dir_all(&pip_dir);
-            let _ = fs::write(pip_dir.join("pip.conf"), &content);
-
-            // 2. Windows pip/pip.ini
-            let win_pip_dir = home.join("pip");
-            let _ = fs::create_dir_all(&win_pip_dir);
-            let _ = fs::write(win_pip_dir.join("pip.ini"), &content);
-
-            if let Some(config_dir) = dirs::config_dir() {
-                let appdata_pip = config_dir.join("pip");
-                let _ = fs::create_dir_all(&appdata_pip);
-                let _ = fs::write(appdata_pip.join("pip.ini"), &content);
-            }
+            let path = pip_path(&home);
+            let content = replace_setting(
+                &crate::config_file::read(&path)?,
+                Some("global"),
+                "index-url",
+                &mirror_url,
+            );
+            (path, content)
         }
-        "go" => {
-            let proxy = format!("GOPROXY={}", mirror_url);
-            let mut cmd = crate::env_helper::create_silent_command("go");
-            cmd.current_dir(&home)
-                .args(["env", "-w", &proxy]);
-            let output = cmd
-                .output()
-                .map_err(|e| format!("执行 go env -w 失败: {}", e))?;
-            if !output.status.success() {
-                let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                // Some locked Windows profiles reject `go env -w`; persist a
-                // user-level GOPROXY fallback so the setting still applies.
-                let go_env = dirs::config_dir().unwrap_or_else(|| home.join("AppData/Roaming")).join("go/env");
-                if let Some(parent) = go_env.parent() { let _ = fs::create_dir_all(parent); }
-                let mut content = fs::read_to_string(&go_env).unwrap_or_default();
-                content.retain(|c| c != '\r');
-                let mut lines: Vec<&str> = content.lines().filter(|l| !l.starts_with("GOPROXY=")).collect();
-                lines.push(&proxy);
-                fs::write(&go_env, lines.join("\n") + "\n")
-                    .map_err(|e| format!("go env 写入失败: {}{}", e, if details.is_empty() { String::new() } else { format!(" ({})", details) }))?;
-            }
-        }
-        "scoop" => {
-            let output = crate::env_helper::create_silent_command("powershell")
-                .args([
-                    "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-                    &format!("scoop config SCOOP_REPO '{}'", mirror_url.replace('\'', "''")),
-                ])
-                .output()
-                .map_err(|e| format!("执行 scoop config 失败: {}", e))?;
-            if !output.status.success() {
-                let details = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                return Err(if details.is_empty() {
-                    format!("Scoop 镜像配置失败，退出码: {:?}", output.status.code())
-                } else {
-                    format!("Scoop 镜像配置失败: {}", details)
-                });
-            }
-        }
-        "cargo" => {
-            let cargo_dir = home.join(".cargo");
-            let _ = fs::create_dir_all(&cargo_dir);
-            let cargo_conf = cargo_dir.join("config.toml");
-            
-            let config_content = if mirror_url.contains("rsproxy") {
-                r#"[source.crates-io]
-replace-with = 'rsproxy-sparse'
-[source.rsproxy]
-registry = "https://rsproxy.cn/crates.io-index"
-[source.rsproxy-sparse]
-registry = "sparse+https://rsproxy.cn/index/"
-[net]
-git-fetch-with-cli = true
-"#
-            } else if mirror_url.contains("ustc") {
-                r#"[source.crates-io]
-replace-with = 'ustc'
-[source.ustc]
-registry = "git://mirrors.ustc.edu.cn/crates.io-index"
-"#
-            } else {
-                r#"[source.crates-io]
-replace-with = 'crates-io'
-"#
-            };
-            fs::write(cargo_conf, config_content).map_err(|e| format!("写入 ~/.cargo/config.toml 失败: {}", e))?;
+        "brew" => {
+            let path = brew_path(&home);
+            let content = replace_setting(
+                &crate::config_file::read(&path)?,
+                None,
+                "HOMEBREW_BOTTLE_DOMAIN",
+                &mirror_url,
+            )
+            .replace("HOMEBREW_BOTTLE_DOMAIN = ", "HOMEBREW_BOTTLE_DOMAIN=");
+            (path, content)
         }
         "docker" => {
-            let docker_dir = home.join(".docker");
-            let _ = fs::create_dir_all(&docker_dir);
-            let docker_cfg = docker_dir.join("daemon.json");
-            
-            let val = serde_json::json!({
-                "registry-mirrors": [mirror_url]
-            });
-            let content = serde_json::to_string_pretty(&val).unwrap_or_default();
-            fs::write(docker_cfg, content).map_err(|e| format!("写入 daemon.json 失败: {}", e))?;
+            if cfg!(target_os = "linux") {
+                return Err("Linux Docker daemon configuration requires an administrator: edit /etc/docker/daemon.json and restart Docker".into());
+            }
+            let path = home.join(".docker/daemon.json");
+            if !path.is_file() {
+                return Err("Open Docker Desktop > Settings > Docker Engine to configure registry-mirrors; no existing daemon.json was found".into());
+            }
+            let old = crate::config_file::read(&path)?;
+            let mut value: serde_json::Value = if old.trim().is_empty() {
+                serde_json::json!({})
+            } else {
+                serde_json::from_str(&old).map_err(|e| e.to_string())?
+            };
+            if !value.is_object() {
+                return Err("Docker configuration is not an object".into());
+            }
+            value["registry-mirrors"] = if mirror_url == "https://registry-1.docker.io" {
+                serde_json::json!([])
+            } else {
+                serde_json::json!([mirror_url])
+            };
+            (
+                path,
+                serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?,
+            )
         }
         "maven" => {
-            let m2_dir = home.join(".m2");
-            let _ = fs::create_dir_all(&m2_dir);
-            let settings_file = m2_dir.join("settings.xml");
-
-            let xml_content = format!(r#"<?xml version="1.0" encoding="UTF-8"?>
-<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
-          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 http://maven.apache.org/xsd/settings-1.0.0.xsd">
-  <mirrors>
-    <mirror>
-      <id>envhub-mirror</id>
-      <mirrorOf>central</mirrorOf>
-      <name>EnvHub Mirror</name>
-      <url>{}</url>
-    </mirror>
-  </mirrors>
-</settings>"#, mirror_url);
-            fs::write(settings_file, xml_content).map_err(|e| format!("写入 settings.xml 失败: {}", e))?;
+            let path = home.join(".m2/settings.xml");
+            let content = update_maven(&crate::config_file::read(&path)?, &mirror_url)?;
+            (path, content)
         }
-        "nuget" => {
-            let _ = crate::env_helper::create_silent_command("dotnet")
-                .args(["nuget", "add", "source", &mirror_url, "-n", "EnvHub-Mirror"])
-                .status();
-        }
-        "composer" => {
-            let _ = crate::env_helper::create_silent_command("composer")
-                .args(["config", "-g", "repos.packagist", "composer", &mirror_url])
-                .status();
-        }
-        "rubygems" => {
-            let _ = crate::env_helper::create_silent_command("gem")
-                .args(["sources", "--add", &mirror_url])
-                .status();
-        }
-        _ => {
-            return Err("该镜像源已保存".to_string());
-        }
-    }
-
+        _ => return Err(format!("Unsupported mirror: {tool}")),
+    };
+    crate::config_file::write(&path, &content)?;
     Ok(true)
 }
 
@@ -531,27 +914,72 @@ pub async fn ping_mirrors() -> Result<HashMap<String, u32>, String> {
         "https://gems.ruby-china.com",
         "https://mirrors.tuna.tsinghua.edu.cn/rubygems/",
         "https://rubygems.org",
+        "https://github.com/ScoopInstaller/Scoop",
+        "https://gitee.com/scoop-installer/scoop",
+        "https://nuget.cdn.azure.cn/v3/index.json",
+        "https://repo.huaweicloud.com/repository/nuget/v3/index.json",
+        "https://api.nuget.org/v3/index.json",
     ];
 
     let mut results = HashMap::new();
 
+    let mut tasks = tokio::task::JoinSet::new();
+    let limit = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
     for url in urls {
-        let (host, port) = parse_host_port(url);
-        let addr = format!("{}:{}", host, port);
+        let limit = limit.clone();
+        tasks.spawn(async move {
+            let _permit = limit.acquire().await.unwrap();
+            let (host, port) = parse_host_port(url);
+            let addr = format!("{}:{}", host, port);
 
-        let start = Instant::now();
-        let ping_res = timeout(Duration::from_millis(2500), TcpStream::connect(&addr)).await;
+            let start = Instant::now();
+            let ping_res = timeout(Duration::from_millis(2500), TcpStream::connect(&addr)).await;
 
-        match ping_res {
-            Ok(Ok(_stream)) => {
-                let ms = start.elapsed().as_millis().max(1) as u32;
-                results.insert(url.to_string(), ms);
+            match ping_res {
+                Ok(Ok(_stream)) => {
+                    let ms = start.elapsed().as_millis().max(1) as u32;
+                    (url.to_string(), ms)
+                }
+                _ => (url.to_string(), 999),
             }
-            _ => {
-                results.insert(url.to_string(), 999);
-            }
-        }
+        });
     }
 
+    while let Some(result) = tasks.join_next().await {
+        let (url, ping) = result.map_err(|e| e.to_string())?;
+        results.insert(url, ping);
+    }
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn cargo_switch_preserves_settings_and_official_has_no_cycle() {
+        let mut doc = "[build]\njobs = 3\n[alias]\nb = 'build'\n".parse().unwrap();
+        update_cargo(&mut doc, "https://rsproxy.cn").unwrap();
+        update_cargo(&mut doc, "https://github.com/rust-lang/crates.io-index").unwrap();
+        assert_eq!(doc["build"]["jobs"].as_integer(), Some(3));
+        assert_eq!(doc["alias"]["b"].as_str(), Some("build"));
+        assert!(doc["source"]["crates-io"].get("replace-with").is_none());
+    }
+    #[test]
+    fn ini_preserves_other_settings_and_sections() {
+        let text = "[global]\ntimeout = 60\nindex-url = old\n[install]\nuser = true\n";
+        let result = replace_setting(text, Some("global"), "index-url", "new");
+        assert!(result.contains("timeout = 60"));
+        assert!(result.contains("[install]\nuser = true"));
+        assert!(!result.contains("old"));
+        assert_eq!(result.matches("index-url").count(), 1);
+    }
+    #[test]
+    fn maven_preserves_credentials() {
+        let text = "<settings><servers><server><id>private</id><password>secret</password></server></servers></settings>";
+        let text = update_maven(text, "https://one.example").unwrap();
+        let text = update_maven(&text, "https://two.example").unwrap();
+        assert!(text.contains("secret"));
+        assert!(!text.contains("one.example"));
+        assert_eq!(text.matches("<mirror>").count(), 1);
+    }
 }
