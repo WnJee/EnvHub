@@ -78,6 +78,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
   const [remoteError, setRemoteError] = useState('');
   const [remoteLoading, setRemoteLoading] = useState(false);
   const [remoteLimit, setRemoteLimit] = useState(100);
+  const [remoteRetry, setRemoteRetry] = useState(0);
   const currentId = currentTool?.id;
   useEffect(() => {
     if (!currentId) return;
@@ -90,7 +91,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
     }).catch(error => { if (!stale) setRemoteError(String(error)); })
       .finally(() => { if (!stale) setRemoteLoading(false); });
     return () => { stale = true; };
-  }, [currentId]);
+  }, [currentId, remoteRetry]);
 
   if (!currentTool) {
     return (
@@ -180,7 +181,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
 
   return (
     <div className="flex-1 flex overflow-hidden bg-[#090D16]">
-      {(remoteLoading || remoteError) && <div role="status" className="absolute bottom-2 right-4 z-10 max-w-md rounded bg-slate-900 px-3 py-1 text-xs text-slate-400">{remoteLoading ? '正在加载所选语言的远端版本…' : `远端版本加载失败，可重选语言重试：${remoteError}`}</div>}
+      {(remoteLoading || remoteError) && <div role="status" className="absolute bottom-2 right-4 z-10 max-w-md rounded bg-slate-900 px-3 py-2 text-xs text-slate-400">{remoteLoading ? '正在加载所选语言的远端版本…' : <><span>远端版本加载失败：{remoteError}</span><button type="button" onClick={() => setRemoteRetry(value => value + 1)} className="ml-2 text-blue-400 underline">重试</button></>}</div>}
       {/* Left List of Runtimes */}
       <div className="w-56 sm:w-64 border-r border-slate-800/80 bg-[#0B1120]/60 flex flex-col shrink-0">
         <div className="p-3.5 border-b border-slate-800/80 flex items-center justify-between">

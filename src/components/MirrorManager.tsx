@@ -42,7 +42,7 @@ export const MirrorManager: React.FC<MirrorManagerProps> = ({
   const handleApply = async (tool: string, url: string, name: string) => {
     try {
       await onSetMirror(tool, url);
-      toast.success(tool === 'docker' ? 'Docker 配置已写入；请在 Docker Desktop 中确认并重启引擎' : `已将 ${tool.toUpperCase()} 镜像源切换为「${name}」`);
+      toast.success(tool === 'docker' ? 'Docker 配置已写入；请在 Docker Desktop 中确认并重启引擎' : ['composer', 'rubygems'].includes(tool) ? `已保存「${name}」配置；未验证网络可用性` : `已将 ${tool.toUpperCase()} 镜像源切换为「${name}」`);
     } catch (err) {
       toast.error(`写入配置失败: ${err}`);
     }
@@ -124,9 +124,16 @@ export const MirrorManager: React.FC<MirrorManagerProps> = ({
             </span>
           </div>
 
+          {['composer', 'rubygems'].includes(currentMirrorConfig.tool) && (
+            <p className="text-xs text-slate-400">
+              此处保存用户级镜像配置，不安装包管理器，也不验证源可用性。
+              {currentMirrorConfig.tool === 'rubygems' ? ' Ruby China 可能遇到证书或 TLS 握手错误，建议优先使用清华源；不会关闭证书校验。项目 Gemfile / Bundler 配置可能覆盖此设置。' : ' 实际使用需安装 PHP 和 Composer；项目仓库配置可能覆盖全局设置。'}
+            </p>
+          )}
+
           <div className="grid grid-cols-1 gap-2.5">
             {currentMirrorConfig.options.map((opt) => {
-              const isCurrent = currentMirrorConfig.currentMirror.trim() === opt.url.trim();
+              const isCurrent = currentMirrorConfig.currentMirror.split(', ').some(url => url.trim().replace(/\/+$/, '') === opt.url.trim().replace(/\/+$/, ''));
               return (
                 <div
                   key={opt.url}
@@ -148,7 +155,7 @@ export const MirrorManager: React.FC<MirrorManagerProps> = ({
                       )}
                       {isCurrent && (
                         <span className="text-[9px] px-2 py-0.2 rounded-full bg-blue-500/20 text-blue-400 font-semibold border border-blue-500/30 flex items-center gap-1">
-                          <Check className="w-2.5 h-2.5" /> 生效中
+                          <Check className="w-2.5 h-2.5" /> 已配置
                         </span>
                       )}
                     </div>

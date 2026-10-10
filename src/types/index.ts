@@ -54,7 +54,7 @@ export interface SystemTool {
 export interface MirrorConfig {
   id: string;
   name: string;
-  tool: 'npm' | 'pip' | 'cargo' | 'go' | 'brew';
+  tool: 'npm' | 'pip' | 'cargo' | 'go' | 'brew' | 'scoop' | 'nuget' | 'docker' | 'maven' | 'composer' | 'rubygems';
   currentMirror: string;
   options: {
     name: string;

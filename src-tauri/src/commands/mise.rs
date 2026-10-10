@@ -434,6 +434,93 @@ static REMOTE_QUERIES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_ne
 static REMOTE_CACHE: std::sync::LazyLock<tokio::sync::Mutex<RemoteCache>> =
     std::sync::LazyLock::new(|| tokio::sync::Mutex::new(std::collections::HashMap::new()));
 
+fn python_network_command(bin: &str) -> tokio::process::Command {
+    let mut cmd = env_helper::create_silent_tokio_command(bin);
+    // A repository-specific identity rewrite wins over broad HTTPS -> SSH rules.
+    // Scope it to the child: never change the user's Git settings or TLS policy.
+    let first = std::env::var("GIT_CONFIG_COUNT")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+    for (offset, source) in [
+        "https://github.com/pyenv/pyenv",
+        "ssh://git@github.com/pyenv/pyenv",
+        "git@github.com:pyenv/pyenv",
+    ]
+    .iter()
+    .enumerate()
+    {
+        cmd.env(
+            format!("GIT_CONFIG_KEY_{}", first + offset),
+            "url.https://github.com/pyenv/pyenv.insteadOf",
+        )
+        .env(format!("GIT_CONFIG_VALUE_{}", first + offset), source);
+    }
+    cmd.env("GIT_CONFIG_COUNT", (first + 3).to_string())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        // Use the Git CLI so its process-scoped config is honored consistently.
+        .env("MISE_GIX", "false")
+        .env("MISE_LIBGIT2", "false");
+    cmd
+}
+
+fn runtime_network_command(bin: &str, tool: &str) -> tokio::process::Command {
+    if tool == "python" {
+        python_network_command(bin)
+    } else {
+        env_helper::create_silent_tokio_command(bin)
+    }
+}
+
+async fn query_remote_versions(
+    bin: &str,
+    tool: &str,
+    directory: &std::path::Path,
+    precompiled: bool,
+) -> Result<Vec<String>, String> {
+    let mut cmd = runtime_network_command(bin, tool);
+    cmd.current_dir(directory).args(["ls-remote", tool]);
+    if precompiled {
+        cmd.env("MISE_PYTHON_COMPILE", "false");
+    }
+    let output = env_helper::checked_output(
+        env_helper::output_timeout(&mut cmd, if tool == "python" { 60 } else { 20 }).await?,
+    )?;
+    let values = filter_latest_minor_versions(
+        tool,
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect(),
+    );
+    if values.is_empty() {
+        return Err(format!(
+            "{tool} 远端未返回可安装版本: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(values)
+}
+
+async fn load_remote_versions(
+    bin: &str,
+    tool: &str,
+    directory: &std::path::Path,
+) -> Result<Vec<String>, String> {
+    match query_remote_versions(bin, tool, directory, false).await {
+        Ok(values) => Ok(values),
+        Err(first) if tool == "python" => {
+            // A shallow python-build clone can mark every definition as newly
+            // released. Use Mise's platform-specific HTTPS index instead of
+            // disabling minimum_release_age or inventing version numbers.
+            query_remote_versions(bin, tool, directory, true)
+                .await
+                .map_err(|fallback| format!("{first}; Python 预编译版本索引也不可用: {fallback}"))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 #[tauri::command]
 pub async fn get_remote_versions(tool_id: String) -> Result<Vec<String>, String> {
     env_helper::validate_target(&tool_id, "latest")?;
@@ -444,22 +531,8 @@ pub async fn get_remote_versions(tool_id: String) -> Result<Vec<String>, String>
     }
     let _permit = REMOTE_QUERIES.acquire().await.map_err(|e| e.to_string())?;
     let bin = env_helper::find_mise_binary().ok_or("Mise CLI is not installed")?;
-    let output = env_helper::checked_output(
-        env_helper::output_timeout(
-            env_helper::create_silent_tokio_command(&bin.to_string_lossy())
-                .current_dir(mise_working_dir())
-                .args(["ls-remote", &tool_id]),
-            20,
-        )
-        .await?,
-    )?;
-    let values = filter_latest_minor_versions(
-        &tool_id,
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .map(str::to_string)
-            .collect(),
-    );
+    let values =
+        load_remote_versions(&bin.to_string_lossy(), &tool_id, &mise_working_dir()).await?;
     REMOTE_CACHE
         .lock()
         .await
@@ -581,7 +654,7 @@ pub async fn install_runtime_version(
     );
     let _ = app.emit("install-progress", 10);
 
-    let mut cmd = env_helper::create_silent_tokio_command(&mise_bin.to_string_lossy());
+    let mut cmd = runtime_network_command(&mise_bin.to_string_lossy(), &tool_id);
     cmd.current_dir(mise_working_dir())
         .args(["install", &target, "--verbose"])
         .stdout(Stdio::piped())
@@ -814,6 +887,76 @@ pub async fn open_terminal_for_runtime(tool_id: String, version: String) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn python_empty_or_failed_list_uses_precompiled_index() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("fake-mise");
+        for first in ["exit 0", "echo 'SSH port 22 failed' >&2; exit 1"] {
+            std::fs::write(&bin, format!("#!/bin/sh\nif [ \"$MISE_PYTHON_COMPILE\" = false ]; then printf '3.12.14\\n3.14.8\\n'; else {first}; fi\n")).unwrap();
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let result = load_remote_versions(bin.to_str().unwrap(), "python", dir.path())
+                .await
+                .unwrap();
+            assert_eq!(result, ["3.14.8", "3.12.14"]);
+        }
+        std::fs::write(&bin, "#!/bin/sh\necho unavailable >&2\nexit 1\n").unwrap();
+        assert!(
+            load_remote_versions(bin.to_str().unwrap(), "python", dir.path())
+                .await
+                .unwrap_err()
+                .contains("unavailable")
+        );
+    }
+    #[tokio::test]
+    async fn python_git_rewrite_is_scoped_and_keeps_https() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("gitconfig");
+        std::fs::write(&config, "[url \"git@github.com:\"]\n\tinsteadOf = https://github.com/\n[http]\n\tsslVerify = true\n").unwrap();
+        for source in [
+            "https://github.com/pyenv/pyenv.git",
+            "ssh://git@github.com/pyenv/pyenv.git",
+            "git@github.com:pyenv/pyenv.git",
+        ] {
+            let output = env_helper::checked_output(
+                env_helper::output_timeout(
+                    python_network_command("git")
+                        .env("GIT_CONFIG_GLOBAL", &config)
+                        .env("GIT_CONFIG_NOSYSTEM", "1")
+                        .current_dir(dir.path())
+                        .args(["ls-remote", "--get-url", source]),
+                    5,
+                )
+                .await
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                "https://github.com/pyenv/pyenv.git"
+            );
+        }
+        let output = env_helper::checked_output(
+            env_helper::output_timeout(
+                python_network_command("git")
+                    .env("GIT_CONFIG_GLOBAL", &config)
+                    .current_dir(dir.path())
+                    .args(["ls-remote", "--get-url", "https://github.com/private/repo"]),
+                5,
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "git@github.com:private/repo"
+        );
+        assert!(std::fs::read_to_string(config)
+            .unwrap()
+            .contains("sslVerify = true"));
+    }
     #[test]
     fn missing_and_vendor_versions() {
         let value = serde_json::json!([

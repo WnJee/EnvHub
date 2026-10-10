@@ -2,6 +2,7 @@ use crate::env_helper;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tokio::net::TcpStream;
 use tokio::time::{timeout, Duration};
@@ -490,16 +491,16 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
         current_mirror: "https://gems.ruby-china.com".to_string(),
         options: vec![
             MirrorOption {
-                name: "Ruby China 镜像 (推荐)".to_string(),
+                name: "Ruby China 镜像".to_string(),
                 url: "https://gems.ruby-china.com".to_string(),
                 ping: None,
-                is_default: Some(true),
+                is_default: None,
             },
             MirrorOption {
                 name: "清华大学 RubyGems 镜像".to_string(),
                 url: "https://mirrors.tuna.tsinghua.edu.cn/rubygems/".to_string(),
                 ping: None,
-                is_default: None,
+                is_default: Some(true),
             },
             MirrorOption {
                 name: "官方 rubygems.org".to_string(),
@@ -552,7 +553,16 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
                     }
                     None => "Unknown Cargo source replacement".into(),
                 };
-            } else if ["nuget", "composer", "rubygems"].contains(&config.tool.as_str()) {
+            } else if config.tool == "composer" {
+                config.current_mirror = composer_path(&home)
+                    .and_then(|p| crate::config_file::read(&p))
+                    .and_then(|s| composer_mirror(&s))
+                    .unwrap_or_else(|e| format!("配置读取失败: {e}"));
+            } else if config.tool == "rubygems" {
+                config.current_mirror = ruby_sources(&ruby_config_paths(&home))
+                    .map(|sources| sources.join(", "))
+                    .unwrap_or_else(|e| format!("配置读取失败: {e}"));
+            } else if config.tool == "nuget" {
                 config.current_mirror = "Unknown (verify with the package manager)".into();
             }
         }
@@ -591,6 +601,218 @@ fn pip_path(home: &std::path::Path) -> std::path::PathBuf {
 
 fn brew_path(home: &std::path::Path) -> std::path::PathBuf {
     home.join(".homebrew/brew.env")
+}
+
+fn composer_path(home: &Path) -> Result<PathBuf, String> {
+    if let Some(dir) = std::env::var_os("COMPOSER_HOME").filter(|s| !s.is_empty()) {
+        return Ok(PathBuf::from(dir).join("config.json"));
+    }
+    if cfg!(windows) {
+        let dir = std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .or_else(dirs::config_dir)
+            .ok_or("无法定位 Composer 配置，请设置 COMPOSER_HOME")?;
+        return Ok(dir.join("Composer/config.json"));
+    }
+    let xdg = std::env::vars_os().any(|(k, _)| k.to_string_lossy().starts_with("XDG_"))
+        || Path::new("/etc/xdg").is_dir();
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"));
+    Ok(composer_unix_home(home, &config, xdg).join("config.json"))
+}
+
+fn composer_unix_home(home: &Path, xdg_config: &Path, use_xdg: bool) -> PathBuf {
+    let legacy = home.join(".composer");
+    let xdg = xdg_config.join("composer");
+    if !use_xdg || (!xdg.is_dir() && legacy.is_dir()) {
+        legacy
+    } else {
+        xdg
+    }
+}
+
+fn composer_config(content: &str) -> Result<serde_json::Value, String> {
+    let value = if content.trim().is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::from_str(content).map_err(|e| format!("Composer config.json 无效: {e}"))?
+    };
+    if !value.is_object() {
+        return Err("Composer config.json 必须是 JSON 对象".into());
+    }
+    Ok(value)
+}
+
+fn composer_mirror(content: &str) -> Result<String, String> {
+    let config = composer_config(content)?;
+    let repos = config.get("repositories");
+    let entry = repos.and_then(|r| r.get("packagist").or_else(|| r.get("packagist.org")));
+    match entry {
+        Some(serde_json::Value::Bool(false)) => Ok("Packagist 已禁用".into()),
+        Some(v) => v
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| "无法识别 Packagist 配置".into()),
+        None if repos.is_some_and(|v| v.is_array()) => {
+            Ok("自定义仓库列表（请用 Composer 检查）".into())
+        }
+        None => Ok("https://repo.packagist.org".into()),
+    }
+}
+
+fn update_composer(content: &str, url: &str) -> Result<String, String> {
+    let mut config = composer_config(content)?;
+    if config.get("repositories").is_none() {
+        config["repositories"] = serde_json::json!({});
+    }
+    let repos = config["repositories"].as_object_mut().ok_or(
+        "Composer repositories 不是命名对象；请用 Composer 管理现有仓库列表，以免改变优先级",
+    )?;
+    repos.remove("packagist.org");
+    repos.insert(
+        "packagist".into(),
+        serde_json::json!({"type": "composer", "url": url}),
+    );
+    serde_json::to_string_pretty(&config)
+        .map(|s| s + "\n")
+        .map_err(|e| e.to_string())
+}
+
+fn ruby_config_paths(home: &Path) -> Vec<PathBuf> {
+    let legacy = home.join(".gemrc");
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"))
+        .join("gem/gemrc");
+    let mut paths = vec![if !legacy.exists() && xdg.is_file() {
+        xdg
+    } else {
+        legacy
+    }];
+    if let Some(extra) = std::env::var_os("GEMRC") {
+        paths.extend(std::env::split_paths(&extra).filter(|p| !p.as_os_str().is_empty()));
+    }
+    paths
+}
+
+fn ruby_sources_in(content: &str) -> Result<Option<Vec<String>>, String> {
+    if content.trim().is_empty() {
+        return Ok(None);
+    }
+    let doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(content).map_err(|e| format!("RubyGems 配置 YAML 无效: {e}"))?;
+    let map = doc.as_mapping().ok_or("RubyGems 配置必须是 YAML 映射")?;
+    let source = map
+        .get(serde_yaml_ng::Value::String(":sources".into()))
+        .or_else(|| map.get(serde_yaml_ng::Value::String("sources".into())));
+    source
+        .map(|v| {
+            v.as_sequence()
+                .ok_or("RubyGems sources 必须是列表")?
+                .iter()
+                .map(|v| {
+                    v.as_str()
+                        .map(str::to_string)
+                        .ok_or_else(|| "RubyGems 源必须是字符串".to_string())
+                })
+                .collect()
+        })
+        .transpose()
+}
+
+fn ruby_sources(paths: &[PathBuf]) -> Result<Vec<String>, String> {
+    let mut sources = vec!["https://rubygems.org".into()];
+    for path in paths {
+        if let Some(values) = ruby_sources_in(&crate::config_file::read(path)?)? {
+            sources = values;
+        }
+    }
+    Ok(sources)
+}
+
+fn is_public_ruby_source(url: &str) -> bool {
+    matches!(
+        url.trim_end_matches('/'),
+        "https://rubygems.org"
+            | "http://rubygems.org"
+            | "https://gems.ruby-china.com"
+            | "https://gems.ruby-china.org"
+            | "https://mirrors.tuna.tsinghua.edu.cn/rubygems"
+    )
+}
+
+fn update_ruby(content: &str, existing: &[String], url: &str) -> Result<String, String> {
+    ruby_sources_in(content)?;
+    let sources: Vec<_> = std::iter::once(url.to_string())
+        .chain(
+            existing
+                .iter()
+                .filter(|s| {
+                    !is_public_ruby_source(s)
+                        && s.trim_end_matches('/') != url.trim_end_matches('/')
+                })
+                .cloned(),
+        )
+        .collect();
+    // Edit only the top-level source block: a YAML reserialization can turn Ruby
+    // symbol keys into quoted strings, changing unrelated gemrc semantics.
+    let key = regex::Regex::new(r#"^(?::sources|sources|\"sources\"|'sources')\s*:"#).unwrap();
+    let mut output = String::new();
+    let mut skipping = false;
+    let mut found = false;
+    for line in content.lines() {
+        if key.is_match(line) {
+            skipping = true;
+            found = true;
+            continue;
+        }
+        let top_level = !line.starts_with(char::is_whitespace)
+            && !line.trim().is_empty()
+            && !line.starts_with('#')
+            && !line.starts_with("- ")
+            && line != "-";
+        if skipping && top_level {
+            skipping = false;
+        }
+        if (!skipping || line.trim().starts_with('#') || line.trim().is_empty())
+            && line.trim() != "..."
+        {
+            output.push_str(line);
+            output.push('\n');
+        }
+    }
+    if ruby_sources_in(content)?.is_some() && !found {
+        return Err("无法安全编辑此 RubyGems YAML 布局，请将 sources 改为顶层块格式".into());
+    }
+    output.push_str(":sources:\n");
+    for source in &sources {
+        output.push_str(&format!(
+            "- {}\n",
+            serde_json::to_string(&source).map_err(|e| e.to_string())?
+        ));
+    }
+    if ruby_sources_in(&output)? != Some(sources) {
+        return Err("RubyGems sources 写入校验失败，未修改原配置".into());
+    }
+    let other_settings = |text: &str| -> Result<serde_yaml_ng::Value, String> {
+        let mut value = if text.trim().is_empty() {
+            serde_yaml_ng::Value::Mapping(Default::default())
+        } else {
+            serde_yaml_ng::from_str(text).map_err(|e| e.to_string())?
+        };
+        if let Some(map) = value.as_mapping_mut() {
+            map.remove(serde_yaml_ng::Value::String(":sources".into()));
+            map.remove(serde_yaml_ng::Value::String("sources".into()));
+        }
+        Ok(value)
+    };
+    if other_settings(content)? != other_settings(&output)? {
+        return Err("无法保留此 RubyGems YAML 布局的其他设置，未修改原配置".into());
+    }
+    Ok(output)
 }
 
 fn replace_setting(content: &str, section: Option<&str>, key: &str, value: &str) -> String {
@@ -739,20 +961,6 @@ pub async fn set_mirror(tool: String, mirror_url: String) -> Result<bool, String
                 mirror_url.clone(),
             ],
         )),
-        "composer" => Some((
-            "composer",
-            vec![
-                "config".into(),
-                "-g".into(),
-                "repos.packagist".into(),
-                "composer".into(),
-                mirror_url.clone(),
-            ],
-        )),
-        "rubygems" => Some((
-            "gem",
-            vec!["sources".into(), "--add".into(), mirror_url.clone()],
-        )),
         _ => None,
     };
     if let Some((program, args)) = command {
@@ -788,6 +996,18 @@ pub async fn set_mirror(tool: String, mirror_url: String) -> Result<bool, String
         .lock()
         .map_err(|e| e.to_string())?;
     let (path, content) = match tool.as_str() {
+        "composer" => {
+            let path = composer_path(&home)?;
+            let content = update_composer(&crate::config_file::read(&path)?, &mirror_url)?;
+            (path, content)
+        }
+        "rubygems" => {
+            let paths = ruby_config_paths(&home);
+            let sources = ruby_sources(&paths)?;
+            let path = paths.last().ok_or("无法定位 RubyGems 配置")?.clone();
+            let content = update_ruby(&crate::config_file::read(&path)?, &sources, &mirror_url)?;
+            (path, content)
+        }
         "npm" => {
             let path = home.join(".npmrc");
             let content = replace_setting(
@@ -955,6 +1175,132 @@ pub async fn ping_mirrors() -> Result<HashMap<String, u32>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn composer_mirror_works_without_executable_and_preserves_settings() {
+        let old = r#"{"config":{"secure-http":true,"github-oauth":{"github.com":"secret"}},"repositories":{"private":{"type":"vcs","url":"https://private.example/repo"},"packagist.org":false}}"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("composer/config.json");
+        let url = "https://mirrors.aliyun.com/composer/";
+        crate::config_file::write(&path, &update_composer(old, url).unwrap()).unwrap();
+        let saved = crate::config_file::read(&path).unwrap();
+        let doc = composer_config(&saved).unwrap();
+        assert_eq!(doc["config"]["secure-http"], true);
+        assert_eq!(doc["config"]["github-oauth"]["github.com"], "secret");
+        assert!(doc["repositories"].get("private").is_some());
+        assert!(doc["repositories"].get("packagist.org").is_none());
+        assert_eq!(composer_mirror(&saved).unwrap(), url);
+        assert_eq!(composer_mirror("").unwrap(), "https://repo.packagist.org");
+        assert!(update_composer("[]", url).is_err());
+        assert!(update_composer("{invalid", url).is_err());
+    }
+    #[test]
+    fn composer_home_follows_xdg_and_legacy_precedence() {
+        let home = tempfile::tempdir().unwrap();
+        let xdg = home.path().join("xdg");
+        assert_eq!(
+            composer_unix_home(home.path(), &xdg, false),
+            home.path().join(".composer")
+        );
+        assert_eq!(
+            composer_unix_home(home.path(), &xdg, true),
+            xdg.join("composer")
+        );
+        fs::create_dir(home.path().join(".composer")).unwrap();
+        assert_eq!(
+            composer_unix_home(home.path(), &xdg, true),
+            home.path().join(".composer")
+        );
+        fs::create_dir_all(xdg.join("composer")).unwrap();
+        assert_eq!(
+            composer_unix_home(home.path(), &xdg, true),
+            xdg.join("composer")
+        );
+    }
+    #[test]
+    fn composer_preserves_private_repository_priority() {
+        let result = update_composer(r#"{"repositories":{"z-first":{"type":"vcs","url":"https://first.example"},"a-second":{"type":"vcs","url":"https://second.example"}}}"#, "https://mirrors.aliyun.com/composer/").unwrap();
+        let config = composer_config(&result).unwrap();
+        let keys: Vec<_> = config["repositories"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["z-first", "a-second", "packagist"]);
+    }
+    #[test]
+    fn ruby_source_switch_preserves_private_sources_and_tls_settings() {
+        let old = "---\n# user settings\n:sources:\n- https://rubygems.org/\n- https://mirrors.tuna.tsinghua.edu.cn/rubygems/\n- https://private.example/gems\n:ssl_verify_mode: 1\n:ssl_ca_cert: /custom/ca.pem\ngem: --no-document\n";
+        let url = "https://gems.ruby-china.com";
+        let sources = ruby_sources_in(old).unwrap().unwrap();
+        let updated = update_ruby(old, &sources, url).unwrap();
+        assert_eq!(
+            ruby_sources_in(&updated).unwrap().unwrap(),
+            [url, "https://private.example/gems"]
+        );
+        assert!(updated
+            .contains(":ssl_verify_mode: 1\n:ssl_ca_cert: /custom/ca.pem\ngem: --no-document"));
+        assert!(updated.contains("# user settings"));
+        assert!(!updated.contains("tuna.tsinghua"));
+        assert_eq!(
+            update_ruby(&updated, &ruby_sources_in(&updated).unwrap().unwrap(), url).unwrap(),
+            updated
+        );
+    }
+    #[test]
+    fn ruby_reads_last_config_override_and_rejects_invalid_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join(".gemrc");
+        let extra = dir.path().join("extra.gemrc");
+        fs::write(&base, ":sources:\n- https://rubygems.org\n").unwrap();
+        fs::write(
+            &extra,
+            "sources: [https://private.example]\n:verbose: true\n",
+        )
+        .unwrap();
+        let paths = vec![base, extra.clone()];
+        let sources = ruby_sources(&paths).unwrap();
+        assert_eq!(sources, ["https://private.example"]);
+        let updated = update_ruby(
+            &fs::read_to_string(&extra).unwrap(),
+            &sources,
+            "https://gems.ruby-china.com",
+        )
+        .unwrap();
+        crate::config_file::write(&extra, &updated).unwrap();
+        assert_eq!(
+            ruby_sources(&paths).unwrap(),
+            ["https://gems.ruby-china.com", "https://private.example"]
+        );
+        for invalid in [
+            "[",
+            ":sources: nope",
+            "- not-a-map",
+            "{sources: [https://old.example]}",
+        ] {
+            assert!(update_ruby(invalid, &[], "https://gems.ruby-china.com").is_err());
+        }
+    }
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn ruby_gems_accepts_edited_symbol_keys_without_network() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.gemrc");
+        let old = ":ssl_verify_mode: 1\ngem: --no-document\n";
+        fs::write(
+            &path,
+            update_ruby(old, &[], "https://gems.ruby-china.com").unwrap(),
+        )
+        .unwrap();
+        let output = env_helper::checked_output(env_helper::output_timeout(
+            env_helper::create_silent_tokio_command("/usr/bin/ruby").args(["-rrubygems", "-rjson", "-e", "c = Gem::ConfigFile.new(['--config-file', ARGV[0]]); puts JSON.generate([c.sources, c.ssl_verify_mode, c['gem']])"])
+                .arg(&path).env_remove("GEMRC").current_dir(dir.path()), 5).await.unwrap()).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            parsed,
+            serde_json::json!([["https://gems.ruby-china.com"], 1, "--no-document"])
+        );
+    }
     #[test]
     fn cargo_switch_preserves_settings_and_official_has_no_cycle() {
         let mut doc = "[build]\njobs = 3\n[alias]\nb = 'build'\n".parse().unwrap();

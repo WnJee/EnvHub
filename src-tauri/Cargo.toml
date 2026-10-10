@@ -1,6 +1,6 @@
 [package]
 name = "envhub"
-version = "0.2.19"
+version = "0.2.20"
 description = "EnvHub - Cross-platform Development Environment and Runtime Manager"
 authors = ["EnvHub Team"]
 edition = "2021"
@@ -16,7 +16,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["preserve_order"] }
+serde_yaml_ng = "0.10"
 tokio = { version = "1", features = ["full"] }
 dirs = "5.0"
 regex = "1.10"
