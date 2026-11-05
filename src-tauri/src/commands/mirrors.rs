@@ -1078,28 +1078,59 @@ pub async fn set_mirror(tool: String, mirror_url: String) -> Result<bool, String
 }
 
 /// Helper to parse host and port from URL for real TCP connect measurement
+/// Extract the TCP host/port to probe for a mirror URL. An explicit port in the
+/// URL wins over the scheme default (previously `host:8080` became
+/// `host:8080:80` and every probe failed).
 fn parse_host_port(url_str: &str) -> (String, u16) {
-    let clean = url_str
-        .split(',')
-        .next()
-        .unwrap_or(url_str)
-        .trim_start_matches("https://")
-        .trim_start_matches("http://")
-        .trim_start_matches("sparse+")
-        .trim_start_matches("git://");
-
-    let host_part = clean.split('/').next().unwrap_or(clean);
-    let port = if url_str.starts_with("http://") || url_str.starts_with("git://") {
+    let clean = url_str.split(',').next().unwrap_or(url_str).trim();
+    let default_port = if clean.starts_with("http://") {
         80
+    } else if clean.starts_with("git://") {
+        9418
     } else {
         443
     };
+    let authority = clean
+        .trim_start_matches("sparse+")
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_start_matches("git://")
+        .trim_start_matches("ssh://");
+    let authority = authority.split('/').next().unwrap_or(authority);
+    // Drop any `user@` prefix before splitting off the port.
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
 
-    (host_part.to_string(), port)
+    // IPv6 literals are bracketed: `[::1]:8080`.
+    if let Some(rest) = authority.strip_prefix('[') {
+        if let Some((host, tail)) = rest.split_once(']') {
+            let port = tail
+                .strip_prefix(':')
+                .and_then(|value| value.parse::<u16>().ok())
+                .unwrap_or(default_port);
+            return (host.to_string(), port);
+        }
+        return (authority.to_string(), default_port);
+    }
+
+    match authority.rsplit_once(':') {
+        Some((host, port)) if !host.is_empty() => match port.parse::<u16>() {
+            Ok(port) => (host.to_string(), port),
+            Err(_) => (authority.to_string(), default_port),
+        },
+        _ => (authority.to_string(), default_port),
+    }
 }
+
+static PING_CACHE: crate::cache::TtlCache<HashMap<String, u32>> =
+    crate::cache::TtlCache::new(std::time::Duration::from_secs(60));
 
 #[tauri::command]
 pub async fn ping_mirrors() -> Result<HashMap<String, u32>, String> {
+    // 38 TCP probes per call; reuse a recent sweep instead of re-running it on
+    // every visit to the mirror page.
+    if let Some(cached) = PING_CACHE.get("all") {
+        return Ok(cached);
+    }
     let urls = [
         "https://registry.npmmirror.com",
         "https://mirrors.cloud.tencent.com/npm/",
@@ -1169,12 +1200,56 @@ pub async fn ping_mirrors() -> Result<HashMap<String, u32>, String> {
         let (url, ping) = result.map_err(|e| e.to_string())?;
         results.insert(url, ping);
     }
+    PING_CACHE.put("all", results.clone());
     Ok(results)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_mirror_urls_into_host_and_port() {
+        assert_eq!(
+            parse_host_port("https://registry.npmmirror.com"),
+            ("registry.npmmirror.com".to_string(), 443)
+        );
+        assert_eq!(
+            parse_host_port("https://mirrors.cloud.tencent.com/npm/"),
+            ("mirrors.cloud.tencent.com".to_string(), 443)
+        );
+        // The goproxy `,direct` suffix must not leak into the host.
+        assert_eq!(
+            parse_host_port("https://goproxy.cn,direct"),
+            ("goproxy.cn".to_string(), 443)
+        );
+        assert_eq!(
+            parse_host_port("sparse+https://rsproxy.cn/index/"),
+            ("rsproxy.cn".to_string(), 443)
+        );
+        // Explicit ports used to produce `host:8080:80` and always fail.
+        assert_eq!(
+            parse_host_port("http://internal.mirror:8080/npm"),
+            ("internal.mirror".to_string(), 8080)
+        );
+        assert_eq!(
+            parse_host_port("https://internal.mirror:8443/npm"),
+            ("internal.mirror".to_string(), 8443)
+        );
+        assert_eq!(
+            parse_host_port("http://plain.example.com"),
+            ("plain.example.com".to_string(), 80)
+        );
+        assert_eq!(
+            parse_host_port("git://example.com/repo.git"),
+            ("example.com".to_string(), 9418)
+        );
+        assert_eq!(
+            parse_host_port("https://user@example.com:9000/"),
+            ("example.com".to_string(), 9000)
+        );
+        assert_eq!(parse_host_port("https://[::1]:8080/"), ("::1".to_string(), 8080));
+    }
     #[test]
     fn composer_mirror_works_without_executable_and_preserves_settings() {
         let old = r#"{"config":{"secure-http":true,"github-oauth":{"github.com":"secret"}},"repositories":{"private":{"type":"vcs","url":"https://private.example/repo"},"packagist.org":false}}"#;

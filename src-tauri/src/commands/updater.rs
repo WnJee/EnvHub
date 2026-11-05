@@ -64,7 +64,9 @@ pub async fn open_path_in_file_manager(path: String) -> Result<bool, String> {
             .arg(select_arg)
             .status()
             .map_err(|e| format!("无法在资源管理器中显示: {}", e))?;
-        Ok(status.success())
+        // explorer.exe returns exit code 1 even when it successfully reveals the
+        // path, so `success()` is never true here. Both 0 and 1 mean "handed off".
+        Ok(matches!(status.code(), Some(0) | Some(1)))
     }
 
     #[cfg(target_os = "linux")]
@@ -110,6 +112,94 @@ pub async fn open_installer_file(path: String) -> Result<bool, String> {
 
 static PENDING_UPDATE: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
+/// Streamed SHA-256 of a downloaded installer.
+fn sha256_hex(path: &std::path::Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|e| e.to_string())?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+/// Parse a `sha256sum`-style manifest (`<digest>  <name>`) and return the digest
+/// recorded for `filename`.
+fn expected_digest(manifest: &str, filename: &str) -> Option<String> {
+    manifest.lines().find_map(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return None;
+        }
+        let mut fields = line.split_whitespace();
+        let digest = fields.next()?;
+        let name = fields.next()?.trim_start_matches('*');
+        let name = name.strip_prefix("./").unwrap_or(name);
+        (digest.len() == 64
+            && digest.chars().all(|c| c.is_ascii_hexdigit())
+            && name == filename)
+            .then(|| digest.to_ascii_lowercase())
+    })
+}
+
+/// Fetch the release's `SHA256SUMS.txt`. Failing to obtain it aborts the update:
+/// an unverifiable installer is not installed.
+async fn fetch_release_manifest(prefix: &str) -> Result<String, String> {
+    let url = format!("{prefix}SHA256SUMS.txt");
+    let output = env_helper::output_timeout(
+        env_helper::create_silent_tokio_command("curl").args([
+            "-s",
+            "-L",
+            "-f",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "30",
+            "--show-error",
+            &url,
+        ]),
+        35,
+    )
+    .await?;
+    let output = env_helper::checked_output(output)?;
+    String::from_utf8(output.stdout).map_err(|e| e.to_string())
+}
+
+/// Remove recovery copies left behind by earlier in-place updates. Called before
+/// staging a new update so at most one previous bundle is ever retained.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn purge_previous_recoveries(parent: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".envhub-recovery-")
+        {
+            continue;
+        }
+        let path = entry.path();
+        let _ = std::fs::remove_dir_all(&path)
+            .or_else(|_| std::fs::remove_file(&path));
+    }
+}
+
 fn download_percent(line: &str) -> Option<u32> {
     line.split_whitespace().find_map(|word| {
         word.strip_suffix('%')?
@@ -122,12 +212,42 @@ fn download_percent(line: &str) -> Option<u32> {
 #[cfg(target_os = "macos")]
 fn application_bundle() -> Result<PathBuf, String> {
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    executable
+    let bundle = executable
         .ancestors()
         .find(|p| p.extension().and_then(|s| s.to_str()) == Some("app"))
         .map(|p| p.to_path_buf())
         .filter(|p| !p.to_string_lossy().contains("AppTranslocation"))
-        .ok_or("Move EnvHub to Applications before updating".into())
+        .ok_or(
+            "EnvHub 正在以只读方式运行（挂载的 DMG 或 App Translocation）。请先把 EnvHub 拖入「应用程序」文件夹，再更新。",
+        )?;
+    // Replacing the bundle renames entries inside the *parent* directory, so
+    // that is what has to be writable — `/Applications` usually is not.
+    let parent = bundle.parent().ok_or("无法定位应用程序目录")?;
+    let writable = match std::fs::metadata(parent) {
+        Ok(meta) => !meta.permissions().readonly() && can_create_in(parent),
+        Err(e) => return Err(format!("无法访问 {}: {e}", parent.display())),
+    };
+    if !writable {
+        return Err(format!(
+            "没有写入 {} 的权限，无法自动更新。请把 EnvHub 移到 ~/Applications，或用管理员权限手动安装新版本。",
+            parent.display()
+        ));
+    }
+    Ok(bundle)
+}
+
+/// Actually probe writability: `metadata().readonly()` alone does not account
+/// for ACLs, group ownership or read-only mounts.
+#[cfg(target_os = "macos")]
+fn can_create_in(dir: &std::path::Path) -> bool {
+    let probe = dir.join(format!(".envhub-probe-{}", std::process::id()));
+    match std::fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 /// The old installation is untouched until staging has completed successfully.
@@ -225,16 +345,30 @@ pub async fn download_and_install_update(
     {
         return Err("Invalid update filename".into());
     }
-    let expected = if cfg!(target_os = "macos") {
-        ".dmg"
+    // `bundle.targets: "all"` produces both the NSIS `-setup.exe` and the
+    // `.msi`, so accept either instead of rejecting MSI users.
+    let accepted: &[&str] = if cfg!(target_os = "macos") {
+        &[".dmg"]
     } else if cfg!(windows) {
-        "-setup.exe"
+        &["-setup.exe", ".msi"]
     } else {
-        ".AppImage"
+        &[".AppImage"]
     };
-    if !filename.ends_with(expected) {
-        return Err("The selected asset is not a supported installer for this platform".into());
+    if !accepted.iter().any(|suffix| filename.ends_with(suffix)) {
+        return Err(format!(
+            "该版本的发布包不是本平台支持的安装格式（需要以 {} 结尾）。请到发布页面手动下载安装。",
+            accepted.join(" 或 ")
+        ));
     }
+    // Verify the installer against the release manifest before touching the
+    // current installation. An unverifiable download is never installed.
+    let _ = app.emit("update-download-progress", 3);
+    let manifest = fetch_release_manifest(&prefix).await.map_err(|error| {
+        format!("无法获取该版本的校验清单 SHA256SUMS.txt（{error}）。为避免安装被篡改的安装包，更新已中止。")
+    })?;
+    let expected_hash = expected_digest(&manifest, filename).ok_or_else(|| {
+        format!("校验清单中没有 {filename} 的 SHA-256 摘要，更新已中止")
+    })?;
     #[cfg(target_os = "linux")]
     let destination = std::env::var_os("APPIMAGE").map(PathBuf::from).filter(|p| p.is_file())
         .ok_or("This installation is managed by the system package manager. Download its deb/rpm package and update with that manager.")?;
@@ -303,6 +437,15 @@ pub async fn download_and_install_update(
     if std::fs::metadata(&target).map_err(|e| e.to_string())?.len() == 0 {
         return Err("Empty update package".into());
     }
+    let _ = app.emit("install-log", format!("正在校验 {filename} 的 SHA-256 完整性..."));
+    let actual_hash = sha256_hex(&target)?;
+    if actual_hash != expected_hash {
+        let _ = std::fs::remove_file(&target);
+        return Err(format!(
+            "安装包完整性校验失败，已删除下载文件。期望 {expected_hash}，实际 {actual_hash}"
+        ));
+    }
+    let _ = app.emit("install-log", "SHA-256 校验通过".to_string());
     let _ = app.emit("update-download-progress", 92);
 
     #[cfg(target_os = "macos")]
@@ -331,6 +474,7 @@ pub async fn download_and_install_update(
             let parent = destination
                 .parent()
                 .ok_or("Invalid application directory")?;
+            purge_previous_recoveries(parent);
             let staging = tempfile::Builder::new()
                 .prefix(".envhub-stage-")
                 .tempdir_in(parent)
@@ -389,6 +533,7 @@ pub async fn download_and_install_update(
             return Err("Invalid AppImage package".into());
         }
         let parent = destination.parent().ok_or("Invalid AppImage location")?;
+        purge_previous_recoveries(parent);
         let staged = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
         std::fs::copy(&target, staged.path()).map_err(|e| e.to_string())?;
         std::fs::set_permissions(staged.path(), std::fs::Permissions::from_mode(0o755))
@@ -513,6 +658,34 @@ pub async fn check_github_latest_release() -> Result<RemoteReleaseInfo, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_sha256sum_manifest() {
+        let digest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+        let manifest = format!(
+            "# generated by release workflow\n{digest}  EnvHub_0.2.21_universal.dmg\n0000000000000000000000000000000000000000000000000000000000000000 *other.exe\n"
+        );
+        assert_eq!(
+            expected_digest(&manifest, "EnvHub_0.2.21_universal.dmg").as_deref(),
+            Some(digest)
+        );
+        assert_eq!(expected_digest(&manifest, "other.exe").unwrap(), "0".repeat(64));
+        assert!(expected_digest(&manifest, "missing.dmg").is_none());
+        assert!(expected_digest("", "anything.dmg").is_none());
+        assert!(expected_digest("nothex  x.dmg", "x.dmg").is_none());
+    }
+
+    #[test]
+    fn hashes_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("payload");
+        std::fs::write(&path, b"abc").unwrap();
+        assert_eq!(
+            sha256_hex(&path).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
     #[test]
     fn reads_curl_carriage_return_progress() {
         assert_eq!(download_percent("##### 25.7%\r"), Some(25));

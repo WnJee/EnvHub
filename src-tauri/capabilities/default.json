@@ -5,6 +5,8 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "shell:default"
+    "core:window:allow-start-dragging",
+    "shell:default",
+    "dialog:default"
   ]
 }

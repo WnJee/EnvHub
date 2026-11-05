@@ -340,6 +340,9 @@ async fn mise_versions(bin: &str, tool: &str) -> Result<serde_json::Value, Strin
 
 #[tauri::command]
 pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
+    if let Some(cached) = RUNTIMES_CACHE.get("all") {
+        return Ok(cached);
+    }
     let bin = env_helper::find_mise_binary();
     let mut tasks = tokio::task::JoinSet::new();
     let limit = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
@@ -413,7 +416,9 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
         result.push(task.map_err(|e| e.to_string())??);
     }
     result.sort_by_key(|(index, _)| *index);
-    Ok(result.into_iter().map(|(_, tool)| tool).collect())
+    let result: Vec<RuntimeTool> = result.into_iter().map(|(_, tool)| tool).collect();
+    RUNTIMES_CACHE.put("all", result.clone());
+    Ok(result)
 }
 
 // Keep original identifiers: distro prefixes, prereleases and build suffixes are executable targets.
@@ -433,6 +438,27 @@ type RemoteCache = std::collections::HashMap<String, (std::time::Instant, Vec<St
 static REMOTE_QUERIES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
 static REMOTE_CACHE: std::sync::LazyLock<tokio::sync::Mutex<RemoteCache>> =
     std::sync::LazyLock::new(|| tokio::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Negative cache for `ls-remote` failures. A failing registry costs up to 60s
+/// per attempt, so remember the failure briefly instead of retrying on every
+/// click.
+type RemoteFailures = std::collections::HashMap<String, (std::time::Instant, String)>;
+static REMOTE_FAILURES: std::sync::LazyLock<tokio::sync::Mutex<RemoteFailures>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(std::collections::HashMap::new()));
+
+const REMOTE_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+const REMOTE_FAILURE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// `get_runtimes` runs 18 `mise ls --json` probes (plus up to 18 executable
+/// version probes). Cache it briefly so a burst of post-mutation refreshes does
+/// not re-spawn the whole fleet; mutations clear it explicitly.
+static RUNTIMES_CACHE: crate::cache::TtlCache<Vec<RuntimeTool>> =
+    crate::cache::TtlCache::new(std::time::Duration::from_secs(15));
+
+/// Called by `env_helper::OperationGuard::drop` after any mutation.
+pub(crate) fn invalidate_probe_cache() {
+    RUNTIMES_CACHE.clear();
+}
 
 fn python_network_command(bin: &str) -> tokio::process::Command {
     let mut cmd = env_helper::create_silent_tokio_command(bin);
@@ -525,14 +551,35 @@ async fn load_remote_versions(
 pub async fn get_remote_versions(tool_id: String) -> Result<Vec<String>, String> {
     env_helper::validate_target(&tool_id, "latest")?;
     if let Some((when, values)) = REMOTE_CACHE.lock().await.get(&tool_id) {
-        if when.elapsed() < std::time::Duration::from_secs(600) {
+        if when.elapsed() < REMOTE_TTL {
             return Ok(values.clone());
         }
     }
+    if let Some((when, error)) = REMOTE_FAILURES.lock().await.get(&tool_id) {
+        if when.elapsed() < REMOTE_FAILURE_TTL {
+            return Err(error.clone());
+        }
+    }
     let _permit = REMOTE_QUERIES.acquire().await.map_err(|e| e.to_string())?;
+    // A concurrent caller may have filled the cache while we queued for a permit.
+    if let Some((when, values)) = REMOTE_CACHE.lock().await.get(&tool_id) {
+        if when.elapsed() < REMOTE_TTL {
+            return Ok(values.clone());
+        }
+    }
     let bin = env_helper::find_mise_binary().ok_or("Mise CLI is not installed")?;
     let values =
-        load_remote_versions(&bin.to_string_lossy(), &tool_id, &mise_working_dir()).await?;
+        match load_remote_versions(&bin.to_string_lossy(), &tool_id, &mise_working_dir()).await {
+            Ok(values) => values,
+            Err(error) => {
+                REMOTE_FAILURES
+                    .lock()
+                    .await
+                    .insert(tool_id, (std::time::Instant::now(), error.clone()));
+                return Err(error);
+            }
+        };
+    REMOTE_FAILURES.lock().await.remove(&tool_id);
     REMOTE_CACHE
         .lock()
         .await

@@ -1,3 +1,4 @@
+pub mod cache;
 pub mod commands;
 pub mod config_file;
 pub mod env_helper;
@@ -10,8 +11,24 @@ pub fn run() {
     env_helper::fix_system_path();
 
     // 2. Build Tauri application with commands registered
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // `single-instance` must be the first plugin registered: it forwards the
+    // second launch's argv to the running instance and exits.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        use tauri::Manager;
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }));
+
+    builder
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             // Mise commands
             get_runtimes,

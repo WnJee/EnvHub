@@ -45,40 +45,65 @@ fn save_project_paths(paths: &[String]) -> Result<(), String> {
     )
 }
 
+/// Canonicalise a user-supplied project path so `/a/b`, `/a/b/`, `~/b` and
+/// symlinked variants all resolve to the same entry.
+fn normalize_project_path(raw: &str) -> PathBuf {
+    let expanded = if raw == "~" {
+        dirs::home_dir().unwrap_or_else(|| PathBuf::from(raw))
+    } else if let Some(rest) = raw.strip_prefix("~/") {
+        dirs::home_dir()
+            .map(|home| home.join(rest))
+            .unwrap_or_else(|| PathBuf::from(raw))
+    } else {
+        PathBuf::from(raw)
+    };
+    expanded.canonicalize().unwrap_or(expanded)
+}
+
 /// Helper to extract real tools from a directory
 fn inspect_directory_tools(dir: &Path) -> (Option<String>, Vec<ProjectTool>) {
-    let mut config_file = None;
+    let mut config_file: Option<String> = None;
     let mut tools = Vec::new();
+    let mut mise_fallback: Option<String> = None;
 
     for name in ["mise.toml", ".mise.toml"] {
         let path = dir.join(name);
-        if path.exists() {
-            config_file = Some(name.to_string());
-            if let Ok(content) = fs::read_to_string(path) {
-                if let Ok(doc) = content.parse::<toml_edit::DocumentMut>() {
-                    if let Some(table) = doc.get("tools").and_then(|t| t.as_table_like()) {
-                        for (id, item) in table.iter() {
-                            let version = item
-                                .as_str()
-                                .or_else(|| item.get("version").and_then(|v| v.as_str()));
-                            if let Some(version) = version {
-                                tools.push(ProjectTool {
-                                    tool_id: id.into(),
-                                    version: version.into(),
-                                });
-                            }
+        if !path.exists() {
+            continue;
+        }
+        let mut declared_tools = false;
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(doc) = content.parse::<toml_edit::DocumentMut>() {
+                if let Some(table) = doc.get("tools").and_then(|t| t.as_table_like()) {
+                    for (id, item) in table.iter() {
+                        let version = item
+                            .as_str()
+                            .or_else(|| item.get("version").and_then(|v| v.as_str()));
+                        if let Some(version) = version {
+                            tools.push(ProjectTool {
+                                tool_id: id.into(),
+                                version: version.into(),
+                            });
+                            declared_tools = true;
                         }
+                    }
+                    if declared_tools {
+                        config_file = Some(name.to_string());
+                        break;
                     }
                 }
             }
-            break;
+        }
+        // The file exists but declares no tools (e.g. only `[env]`). Do not let
+        // it hide a sibling `.tool-versions`, but remember it as a fallback.
+        if mise_fallback.is_none() {
+            mise_fallback = Some(name.to_string());
         }
     }
 
     // 2. Check .tool-versions (asdf / mise standard)
     let tool_versions = dir.join(".tool-versions");
-    if tool_versions.exists() && config_file.is_none() {
-        config_file = Some(".tool-versions".to_string());
+    if tool_versions.exists() && tools.is_empty() {
         if let Ok(content) = fs::read_to_string(&tool_versions) {
             for line in content.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
@@ -89,7 +114,14 @@ fn inspect_directory_tools(dir: &Path) -> (Option<String>, Vec<ProjectTool>) {
                     });
                 }
             }
+            if !tools.is_empty() {
+                config_file = Some(".tool-versions".to_string());
+            }
         }
+    }
+
+    if config_file.is_none() {
+        config_file = mise_fallback;
     }
 
     // 3. Check package.json (Node.js)
@@ -150,51 +182,64 @@ fn inspect_directory_tools(dir: &Path) -> (Option<String>, Vec<ProjectTool>) {
     (config_file, tools)
 }
 
+/// Sync (not `async`) so Tauri runs it on its blocking pool: it does blocking
+/// file IO for every bound project.
 #[tauri::command]
-pub async fn get_projects() -> Result<Vec<ProjectEnv>, String> {
+pub fn get_projects() -> Result<Vec<ProjectEnv>, String> {
     let saved_paths = load_saved_project_paths()?;
     let mut projects = Vec::new();
+    let mut seen = std::collections::HashSet::new();
 
     for path_str in saved_paths {
         let p = Path::new(&path_str);
-        if p.exists() {
-            let (config_file, tools) = inspect_directory_tools(p);
-            let name = p
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "project".to_string());
-            projects.push(ProjectEnv {
-                id: path_str.clone(),
-                name,
-                path: path_str,
-                config_file,
-                tools,
-                last_modified: Some("已绑定".to_string()),
-            });
+        if !p.exists() {
+            continue;
         }
+        let normalized = normalize_project_path(&path_str);
+        if !seen.insert(normalized.clone()) {
+            continue;
+        }
+        let (config_file, tools) = inspect_directory_tools(p);
+        let name = normalized
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "project".to_string());
+        projects.push(ProjectEnv {
+            id: normalized.to_string_lossy().to_string(),
+            name,
+            path: normalized.to_string_lossy().to_string(),
+            config_file,
+            tools,
+            last_modified: Some("已绑定".to_string()),
+        });
     }
 
     Ok(projects)
 }
 
 #[tauri::command]
-pub async fn scan_and_add_project(path: String) -> Result<ProjectEnv, String> {
-    let p = Path::new(&path);
-    if !p.is_absolute() || !p.is_dir() {
+pub fn scan_and_add_project(path: String) -> Result<ProjectEnv, String> {
+    let normalized = normalize_project_path(&path);
+    if !normalized.is_absolute() || !normalized.is_dir() {
         return Err(format!("指定路径不存在: {}", path));
     }
+    let path = normalized.to_string_lossy().to_string();
 
-    let name = p
+    let name = normalized
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "project".to_string());
-    let (config_file, tools) = inspect_directory_tools(p);
+    let (config_file, tools) = inspect_directory_tools(&normalized);
 
     let _guard = crate::config_file::CONFIG_LOCK
         .lock()
         .map_err(|e| e.to_string())?;
     let mut saved = load_saved_project_paths()?;
-    if !saved.contains(&path) {
+    // Compare canonical forms so `/a/b/` does not create a duplicate entry.
+    let already_saved = saved
+        .iter()
+        .any(|existing| normalize_project_path(existing) == normalized);
+    if !already_saved {
         saved.push(path.clone());
         save_project_paths(&saved)?;
     }
@@ -210,18 +255,19 @@ pub async fn scan_and_add_project(path: String) -> Result<ProjectEnv, String> {
 }
 
 #[tauri::command]
-pub async fn remove_project(path: String) -> Result<bool, String> {
+pub fn remove_project(path: String) -> Result<bool, String> {
     let _guard = crate::config_file::CONFIG_LOCK
         .lock()
         .map_err(|e| e.to_string())?;
+    let target = normalize_project_path(&path);
     let mut saved = load_saved_project_paths()?;
-    saved.retain(|p| p != &path);
+    saved.retain(|existing| normalize_project_path(existing) != target);
     save_project_paths(&saved)?;
     Ok(true)
 }
 
 #[tauri::command]
-pub async fn set_project_tool_version(
+pub fn set_project_tool_version(
     project_path: String,
     tool_id: String,
     version: String,
@@ -271,14 +317,29 @@ pub async fn set_project_tool_version(
 }
 
 #[tauri::command]
-pub async fn open_in_editor(path: String) -> Result<bool, String> {
+pub fn open_in_editor(path: String) -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
-        let status = crate::env_helper::create_silent_command("open")
-            .args(["-a", "Visual Studio Code", &path])
+        // Prefer the `code` shim so the folder opens as a workspace.
+        if let Ok(status) = crate::env_helper::create_silent_command("code")
+            .arg(&path)
             .status()
-            .map_err(|e| format!("打开 VS Code 失败: {}", e))?;
-        Ok(status.success())
+        {
+            if status.success() {
+                return Ok(true);
+            }
+        }
+        for app in ["Visual Studio Code", "Cursor", "Zed", "Sublime Text"] {
+            if let Ok(status) = crate::env_helper::create_silent_command("open")
+                .args(["-a", app, &path])
+                .status()
+            {
+                if status.success() {
+                    return Ok(true);
+                }
+            }
+        }
+        Err("未检测到可用的代码编辑器（VS Code / Cursor / Zed / Sublime Text）。请先安装其中之一".into())
     }
 
     #[cfg(target_os = "windows")]
@@ -312,7 +373,7 @@ pub async fn open_in_editor(path: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub async fn open_in_terminal(path: String) -> Result<bool, String> {
+pub fn open_in_terminal(path: String) -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
         let status = crate::env_helper::create_silent_command("open")
@@ -361,8 +422,8 @@ pub async fn open_in_terminal(path: String) -> Result<bool, String> {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn edits_quoted_project_key_without_duplicate() {
+    #[test]
+    fn edits_quoted_project_key_without_duplicate() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".mise.toml");
         fs::write(
@@ -375,7 +436,6 @@ mod tests {
             "node".into(),
             "22.0.0".into(),
         )
-        .await
         .unwrap();
         let doc = fs::read_to_string(path)
             .unwrap()
@@ -385,8 +445,8 @@ mod tests {
         assert_eq!(doc["env"]["KEEP"].as_str(), Some("yes"));
     }
 
-    #[tokio::test]
-    async fn preserves_asdf_format_and_other_tools() {
+    #[test]
+    fn preserves_asdf_format_and_other_tools() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".tool-versions");
         fs::write(&path, "node 20.0.0 # keep comment\npython 3.12.10\n").unwrap();
@@ -395,12 +455,49 @@ mod tests {
             "node".into(),
             "22.0.0".into(),
         )
-        .await
         .unwrap();
         assert_eq!(
             fs::read_to_string(path).unwrap(),
             "node 22.0.0 # keep comment\npython 3.12.10\n"
         );
         assert!(!dir.path().join(".mise.toml").exists());
+    }
+
+    #[test]
+    fn mise_toml_without_tools_table_does_not_hide_tool_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("mise.toml"),
+            "[env]\nNODE_ENV = \"development\"\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join(".tool-versions"), "node 20.1.0\npython 3.12.10\n")
+            .unwrap();
+        let (config_file, tools) = inspect_directory_tools(dir.path());
+        assert_eq!(config_file.as_deref(), Some(".tool-versions"));
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].tool_id, "node");
+    }
+
+    #[test]
+    fn mise_toml_with_tools_wins_over_tool_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("mise.toml"), "[tools]\nnode = \"22.0.0\"\n").unwrap();
+        fs::write(dir.path().join(".tool-versions"), "node 20.1.0\n").unwrap();
+        let (config_file, tools) = inspect_directory_tools(dir.path());
+        assert_eq!(config_file.as_deref(), Some("mise.toml"));
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].version, "22.0.0");
+    }
+
+    #[test]
+    fn normalizes_trailing_separators_and_tilde() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = normalize_project_path(&dir.path().to_string_lossy());
+        let trailing = normalize_project_path(&format!("{}/", dir.path().to_string_lossy()));
+        assert_eq!(plain, trailing);
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(normalize_project_path("~"), home.canonicalize().unwrap_or(home));
+        }
     }
 }

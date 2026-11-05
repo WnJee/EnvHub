@@ -24,6 +24,10 @@ regex = "1.10"
 toml_edit = "0.22"
 tempfile = "3"
 xmltree = "0.11"
+sha2 = "0.11.1"
+tauri-plugin-dialog = "2.8.4"
+tauri-plugin-single-instance = "2.5.5"
+tauri-plugin-window-state = "2.5.0"
 
 [features]
 default = ["custom-protocol"]

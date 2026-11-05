@@ -37,8 +37,16 @@ pub struct SystemTool {
     pub installed_version: Option<String>,
     #[serde(rename = "installCommand")]
     pub install_command: String,
+    /// False when this platform has no automated install path for the tool
+    /// (vendor repository required, unsupported package manager, ...).
+    #[serde(default = "default_true")]
+    pub supported: bool,
     pub icon: String,
     pub homepage: String,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -165,6 +173,11 @@ pub async fn get_system_status() -> Result<SystemStatus, String> {
 
 #[tauri::command]
 pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
+    // Probing ~30 tools spawns ~30 processes; a burst of post-install refreshes
+    // would otherwise re-probe everything on every click.
+    if let Some(cached) = SYSTEM_TOOLS_CACHE.get("all") {
+        return Ok(cached);
+    }
     let mut tools = Vec::new();
 
     #[cfg(not(target_os = "windows"))]
@@ -174,6 +187,7 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
         description: "macOS 与 Linux 必备的终端软件包与命令行工具包管理器".to_string(),
         category: "Package Manager".to_string(),
         is_installed: false,
+        supported: true,
         installed_version: None,
         install_command: "/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\"".to_string(),
         icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/homebrew/homebrew-original.svg".to_string(),
@@ -187,6 +201,7 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
         description: "Windows 极简、不污染系统注册表的命令行软件与开发环境包管理器".to_string(),
         category: "Package Manager".to_string(),
         is_installed: false,
+        supported: true,
         installed_version: None,
         install_command:
             "powershell -ExecutionPolicy RemoteSigned -Command \"irm get.scoop.sh | iex\""
@@ -197,23 +212,52 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
     });
 
     tools.extend(vec![
+        // 1. 代码协作与版本控制 (VCS)
         SystemTool {
             id: "git".to_string(),
             name: "Git".to_string(),
             description: "全球最主流的代码版本管理与协作工具".to_string(),
             category: "VCS".to_string(),
             is_installed: false,
+        supported: true,
             installed_version: None,
             install_command: if cfg!(target_os = "macos") { "brew install git".to_string() } else { "winget install Git.Git".to_string() },
             icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/git/git-original.svg".to_string(),
             homepage: "https://git-scm.com".to_string(),
         },
         SystemTool {
+            id: "gh".to_string(),
+            name: "GitHub CLI (gh)".to_string(),
+            description: "GitHub 官方命令行工具，直接在终端管理 PR、Issue、Release 与 Actions".to_string(),
+            category: "VCS".to_string(),
+            is_installed: false,
+        supported: true,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install gh".to_string() } else { "winget install GitHub.cli".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/github/github-original.svg".to_string(),
+            homepage: "https://cli.github.com".to_string(),
+        },
+        SystemTool {
+            id: "lazygit".to_string(),
+            name: "LazyGit".to_string(),
+            description: "极速全键盘操作的终端可视化 Git 分支与提交管理面板".to_string(),
+            category: "VCS".to_string(),
+            is_installed: false,
+        supported: true,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install lazygit".to_string() } else { "winget install JesseDuffield.lazygit".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/git/git-original.svg".to_string(),
+            homepage: "https://github.com/jesseduffield/lazygit".to_string(),
+        },
+
+        // 2. 容器与服务架构 (Container & Server)
+        SystemTool {
             id: "docker".to_string(),
             name: "Docker CLI".to_string(),
             description: "轻量级应用容器化引擎与开发环境虚拟化基建".to_string(),
             category: "Container".to_string(),
             is_installed: false,
+        supported: true,
             installed_version: None,
             install_command: if cfg!(target_os = "macos") { "brew install --cask docker".to_string() } else { "winget install Docker.DockerDesktop".to_string() },
             icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/docker/docker-original.svg".to_string(),
@@ -225,28 +269,20 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
             description: "定义和运行多容器 Docker 应用程序的统一编排工具".to_string(),
             category: "Container".to_string(),
             is_installed: false,
+        supported: true,
             installed_version: None,
             install_command: if cfg!(target_os = "macos") { "brew install docker-compose".to_string() } else { "winget install Docker.DockerCompose".to_string() },
             icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/docker/docker-original.svg".to_string(),
             homepage: "https://docs.docker.com/compose/".to_string(),
         },
-        SystemTool {
-            id: "nginx".to_string(),
-            name: "Nginx".to_string(),
-            description: "高性能 HTTP 和反向代理 Web 服务器，负载均衡利器".to_string(),
-            category: "Server".to_string(),
-            is_installed: false,
-            installed_version: None,
-            install_command: if cfg!(target_os = "macos") { "brew install nginx".to_string() } else { "winget install Nginx.Nginx".to_string() },
-            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/nginx/nginx-original.svg".to_string(),
-            homepage: "https://nginx.org".to_string(),
-        },
+        // 3. 数据库与数据分析 (Database)
         SystemTool {
             id: "redis".to_string(),
             name: "Redis".to_string(),
             description: "超高速开源内存键值数据库与高性能消息缓存中间件".to_string(),
             category: "Database".to_string(),
             is_installed: false,
+        supported: true,
             installed_version: None,
             install_command: if cfg!(target_os = "macos") { "brew install redis".to_string() } else { "winget install Redis.Redis".to_string() },
             icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/redis/redis-original.svg".to_string(),
@@ -258,6 +294,7 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
             description: "全球最广泛使用的开源关系型数据库管理系统".to_string(),
             category: "Database".to_string(),
             is_installed: false,
+        supported: true,
             installed_version: None,
             install_command: if cfg!(target_os = "macos") { "brew install mysql".to_string() } else { "winget install Oracle.MySQL".to_string() },
             icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/mysql/mysql-original.svg".to_string(),
@@ -269,6 +306,7 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
             description: "强大、高度可扩展且功能完备的企业级开源对象关系型数据库".to_string(),
             category: "Database".to_string(),
             is_installed: false,
+        supported: true,
             installed_version: None,
             install_command: if cfg!(target_os = "macos") { "brew install postgresql@16".to_string() } else { "winget install PostgreSQL.PostgreSQL".to_string() },
             icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/postgresql/postgresql-original.svg".to_string(),
@@ -277,42 +315,36 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
         SystemTool {
             id: "mongodb".to_string(),
             name: "MongoDB".to_string(),
-            description: "面向文档的现代化 NoSQL 高性能高可用数据库".to_string(),
+            description: "面向文档的现代化 NoSQL 高性能高可用分布式数据库".to_string(),
             category: "Database".to_string(),
             is_installed: false,
+        supported: true,
             installed_version: None,
             install_command: if cfg!(target_os = "macos") { "brew install mongodb-community".to_string() } else { "winget install MongoDB.Server".to_string() },
             icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/mongodb/mongodb-original.svg".to_string(),
             homepage: "https://www.mongodb.com".to_string(),
         },
         SystemTool {
-            id: "ollama".to_string(),
-            name: "Ollama".to_string(),
-            description: "本地极速运行开源大语言模型 (DeepSeek, Llama 3, Qwen) 的轻量级引擎".to_string(),
-            category: "AI & ML".to_string(),
+            id: "duckdb".to_string(),
+            name: "DuckDB".to_string(),
+            description: "高性能进程内嵌入式分析型 SQL 数据库，秒级极速分析 CSV、Parquet 与 JSON".to_string(),
+            category: "Database".to_string(),
             is_installed: false,
+        supported: true,
             installed_version: None,
-            install_command: if cfg!(target_os = "macos") { "brew install --cask ollama".to_string() } else { "winget install Ollama.Ollama".to_string() },
-            icon: "https://ollama.com/public/ollama.png".to_string(),
-            homepage: "https://ollama.com".to_string(),
+            install_command: if cfg!(target_os = "macos") { "brew install duckdb".to_string() } else { "winget install DuckDB.DuckDB".to_string() },
+            icon: "https://duckdb.org/images/favicon/favicon.ico".to_string(),
+            homepage: "https://duckdb.org".to_string(),
         },
-        SystemTool {
-            id: "gh".to_string(),
-            name: "GitHub CLI (gh)".to_string(),
-            description: "GitHub 官方命令行工具，直接在终端管理 PR、Issue 与 Actions".to_string(),
-            category: "CLI Utility".to_string(),
-            is_installed: false,
-            installed_version: None,
-            install_command: if cfg!(target_os = "macos") { "brew install gh".to_string() } else { "winget install GitHub.cli".to_string() },
-            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/github/github-original.svg".to_string(),
-            homepage: "https://cli.github.com".to_string(),
-        },
+
+        // 4. 搜索、代码分析与文本替换 (Search)
         SystemTool {
             id: "ripgrep".to_string(),
             name: "Ripgrep (rg)".to_string(),
-            description: "基于 Rust 实现的超高速递归代码全文搜索工具".to_string(),
+            description: "基于 Rust 实现的超高速递归代码与文件全文搜索工具".to_string(),
             category: "Search".to_string(),
             is_installed: false,
+        supported: true,
             installed_version: None,
             install_command: if cfg!(target_os = "macos") { "brew install ripgrep".to_string() } else { "winget install BurntSushi.ripgrep.MSVC".to_string() },
             icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/rust/rust-original.svg".to_string(),
@@ -324,87 +356,148 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
             description: "现代化极速文件搜索工具，人性化语法替代传统 find".to_string(),
             category: "Search".to_string(),
             is_installed: false,
+        supported: true,
             installed_version: None,
             install_command: if cfg!(target_os = "macos") { "brew install fd".to_string() } else { "winget install sharkdp.fd".to_string() },
             icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/rust/rust-original.svg".to_string(),
             homepage: "https://github.com/sharkdp/fd".to_string(),
         },
         SystemTool {
-            id: "lazygit".to_string(),
-            name: "LazyGit".to_string(),
-            description: "极速全键盘操作的终端可视化 Git 分支与提交管理面板".to_string(),
-            category: "VCS".to_string(),
+            id: "ast-grep".to_string(),
+            name: "ast-grep (sg)".to_string(),
+            description: "基于 AST 语法树结构的代码精确搜索、静态分析与重构模式批量替换利器".to_string(),
+            category: "Search".to_string(),
             is_installed: false,
+        supported: true,
             installed_version: None,
-            install_command: if cfg!(target_os = "macos") { "brew install lazygit".to_string() } else { "winget install JesseDuffield.lazygit".to_string() },
-            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/git/git-original.svg".to_string(),
-            homepage: "https://github.com/jesseduffield/lazygit".to_string(),
+            install_command: if cfg!(target_os = "macos") { "brew install ast-grep".to_string() } else { "winget install ast-grep.ast-grep".to_string() },
+            icon: "https://ast-grep.github.io/logo.svg".to_string(),
+            homepage: "https://ast-grep.github.io".to_string(),
         },
-        SystemTool {
-            id: "bat".to_string(),
-            name: "Bat".to_string(),
-            description: "支持代码语法高亮与 Git 变动集成的现代化 cat 替代神器".to_string(),
-            category: "CLI Utility".to_string(),
-            is_installed: false,
-            installed_version: None,
-            install_command: if cfg!(target_os = "macos") { "brew install bat".to_string() } else { "winget install sharkdp.bat".to_string() },
-            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/rust/rust-original.svg".to_string(),
-            homepage: "https://github.com/sharkdp/bat".to_string(),
-        },
-        SystemTool {
-            id: "fzf".to_string(),
-            name: "FZF".to_string(),
-            description: "通用终端交互式模糊搜索神器，快速检索命令历史与文件".to_string(),
-            category: "CLI Utility".to_string(),
-            is_installed: false,
-            installed_version: None,
-            install_command: if cfg!(target_os = "macos") { "brew install fzf".to_string() } else { "winget install junegunn.fzf".to_string() },
-            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/go/go-original.svg".to_string(),
-            homepage: "https://github.com/junegunn/fzf".to_string(),
-        },
-        SystemTool {
-            id: "zoxide".to_string(),
-            name: "Zoxide (z)".to_string(),
-            description: "深度记忆目录权重的智能终端秒速跳转工具（替代 cd）".to_string(),
-            category: "CLI Utility".to_string(),
-            is_installed: false,
-            installed_version: None,
-            install_command: if cfg!(target_os = "macos") { "brew install zoxide".to_string() } else { "winget install ajeetdsouza.zoxide".to_string() },
-            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/rust/rust-original.svg".to_string(),
-            homepage: "https://github.com/ajeetdsouza/zoxide".to_string(),
-        },
+
+        // 5. 音视频与多媒体处理 (Media)
         SystemTool {
             id: "ffmpeg".to_string(),
             name: "FFmpeg".to_string(),
-            description: "领先的跨平台音视频编解码、转码与多媒体流处理框架".to_string(),
+            description: "领先的跨平台音视频编解码、剪辑、格式转换与多媒体流处理框架".to_string(),
             category: "Media".to_string(),
             is_installed: false,
+        supported: true,
             installed_version: None,
             install_command: if cfg!(target_os = "macos") { "brew install ffmpeg".to_string() } else { "winget install Gyan.FFmpeg".to_string() },
             icon: "https://ffmpeg.org/favicon.ico".to_string(),
             homepage: "https://ffmpeg.org".to_string(),
         },
         SystemTool {
-            id: "cmake".to_string(),
-            name: "CMake".to_string(),
-            description: "跨平台自动化建构系统，C/C++ 与 Rust 复杂工程依赖".to_string(),
-            category: "Build".to_string(),
+            id: "imagemagick".to_string(),
+            name: "ImageMagick".to_string(),
+            description: "工业级图像处理与格式转换命令行套件，支持批量缩放、裁剪与水印合成".to_string(),
+            category: "Media".to_string(),
             is_installed: false,
+        supported: true,
             installed_version: None,
-            install_command: if cfg!(target_os = "macos") { "brew install cmake".to_string() } else { "winget install Kitware.CMake".to_string() },
-            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/cmake/cmake-original.svg".to_string(),
-            homepage: "https://cmake.org".to_string(),
+            install_command: if cfg!(target_os = "macos") { "brew install imagemagick".to_string() } else { "winget install ImageMagick.ImageMagick".to_string() },
+            icon: "https://imagemagick.org/image/wand.png".to_string(),
+            homepage: "https://imagemagick.org".to_string(),
         },
         SystemTool {
-            id: "neovim".to_string(),
-            name: "Neovim (nvim)".to_string(),
-            description: "可高度定制化、支持 Lua 插件生态的下一代现代化终端编辑器".to_string(),
-            category: "Editor".to_string(),
+            id: "exiftool".to_string(),
+            name: "ExifTool".to_string(),
+            description: "功能完备的多媒体元数据（EXIF、IPTC、XMP）读取、批量修改与隐私清理神器".to_string(),
+            category: "Media".to_string(),
             is_installed: false,
+        supported: true,
             installed_version: None,
-            install_command: if cfg!(target_os = "macos") { "brew install neovim".to_string() } else { "winget install Neovim.Neovim".to_string() },
-            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/neovim/neovim-original.svg".to_string(),
-            homepage: "https://neovim.io".to_string(),
+            install_command: if cfg!(target_os = "macos") { "brew install exiftool".to_string() } else { "winget install PhilHarvey.ExifTool".to_string() },
+            icon: "https://exiftool.org/favicon.ico".to_string(),
+            homepage: "https://exiftool.org".to_string(),
+        },
+        SystemTool {
+            id: "yt-dlp".to_string(),
+            name: "yt-dlp".to_string(),
+            description: "极其强大的多网站音视频与字幕提取、格式转换与批量下载命令行神器".to_string(),
+            category: "Media".to_string(),
+            is_installed: false,
+        supported: true,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install yt-dlp".to_string() } else { "winget install yt-dlp.yt-dlp".to_string() },
+            icon: "https://raw.githubusercontent.com/yt-dlp/yt-dlp/master/.github/banner.svg".to_string(),
+            homepage: "https://github.com/yt-dlp/yt-dlp".to_string(),
+        },
+
+        // 6. 网络传输与云存储 (Network)
+        SystemTool {
+            id: "aria2".to_string(),
+            name: "aria2".to_string(),
+            description: "轻量级多协议（HTTP/FTP/BT）、多线程多连接的极速命令行下载引擎".to_string(),
+            category: "Network".to_string(),
+            is_installed: false,
+        supported: true,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install aria2".to_string() } else { "winget install aria2.aria2".to_string() },
+            icon: "https://aria2.github.io/favicon.ico".to_string(),
+            homepage: "https://aria2.github.io".to_string(),
+        },
+        // 7. 命令行效率与结构化数据处理 (CLI Utility)
+        SystemTool {
+            id: "fzf".to_string(),
+            name: "FZF".to_string(),
+            description: "通用终端交互式模糊搜索神器，快速检索命令历史、文件与 Git 分支".to_string(),
+            category: "CLI Utility".to_string(),
+            is_installed: false,
+        supported: true,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install fzf".to_string() } else { "winget install junegunn.fzf".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/go/go-original.svg".to_string(),
+            homepage: "https://github.com/junegunn/fzf".to_string(),
+        },
+        SystemTool {
+            id: "jq".to_string(),
+            name: "jq".to_string(),
+            description: "轻量级且灵活强大的命令行 JSON 数据查询、切片、过滤与转换工具".to_string(),
+            category: "CLI Utility".to_string(),
+            is_installed: false,
+        supported: true,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install jq".to_string() } else { "winget install jqlang.jq".to_string() },
+            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon/icons/json/json-original.svg".to_string(),
+            homepage: "https://jqlang.github.io/jq/".to_string(),
+        },
+        SystemTool {
+            id: "yq".to_string(),
+            name: "yq".to_string(),
+            description: "便携高效的命令行 YAML、JSON、XML 与 CSV 数据处理与格式互转神器".to_string(),
+            category: "CLI Utility".to_string(),
+            is_installed: false,
+        supported: true,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install yq".to_string() } else { "winget install MikeFarah.yq".to_string() },
+            icon: "https://raw.githubusercontent.com/mikefarah/yq/master/assets/yq-icon.png".to_string(),
+            homepage: "https://github.com/mikefarah/yq".to_string(),
+        },
+        SystemTool {
+            id: "pandoc".to_string(),
+            name: "Pandoc".to_string(),
+            description: "全能标记语言文档格式转换瑞士军刀，支持 Markdown、Docx、HTML、PDF 互转".to_string(),
+            category: "CLI Utility".to_string(),
+            is_installed: false,
+        supported: true,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install pandoc".to_string() } else { "winget install JohnMacFarlane.Pandoc".to_string() },
+            icon: "https://pandoc.org/logo.png".to_string(),
+            homepage: "https://pandoc.org".to_string(),
+        },
+        SystemTool {
+            id: "yazi".to_string(),
+            name: "Yazi".to_string(),
+            description: "基于 Rust 构建的现代化超极速全键盘异步终端文件管理器与快速预览器".to_string(),
+            category: "CLI Utility".to_string(),
+            is_installed: false,
+        supported: true,
+            installed_version: None,
+            install_command: if cfg!(target_os = "macos") { "brew install yazi".to_string() } else { "winget install sxyazi.yazi".to_string() },
+            icon: "https://raw.githubusercontent.com/sxyazi/yazi/main/assets/logo.png".to_string(),
+            homepage: "https://yazi-rs.github.io".to_string(),
         },
     ]);
 
@@ -426,32 +519,87 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
     }
     #[cfg(target_os = "linux")]
     for tool in &mut tools {
-        tool.install_command = linux_install_args(linux_package_manager(), &tool.id)
-            .map(|args| format!("{} {}", linux_package_manager(), args.join(" ")))
-            .unwrap_or_else(|reason| reason);
-    }
-
-    #[cfg(target_os = "windows")]
-    for tool in &mut tools {
-        if tool.id != "scoop" {
-            // Windows installs use Scoop first. `install_system_tool` only
-            // falls back to WinGet when Scoop is unavailable.
-            tool.install_command = format!("scoop install {}", scoop_package_for(&tool.id));
+        let manager = linux_package_manager();
+        match linux_install_args(manager, &tool.id) {
+            Ok(args) => tool.install_command = format!("{manager} {}", args.join(" ")),
+            Err(reason) => {
+                // No automated path on this distribution: surface the reason
+                // instead of letting the user click install and hit an error.
+                tool.supported = false;
+                tool.install_command = reason;
+            }
         }
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        // Windows installs use Scoop first and fall back to WinGet. Report the
+        // command that will actually run, not an unconditional `scoop install`.
+        let has_scoop = env_helper::command_available("scoop");
+        let has_winget = env_helper::command_available("winget");
+        for tool in &mut tools {
+            if tool.id == "scoop" {
+                continue;
+            }
+            let (scoop_pkg, winget_pkg) = windows_packages_for(&tool.id);
+            tool.install_command = if has_scoop {
+                format!("scoop install {scoop_pkg}")
+            } else if has_winget {
+                format!("winget install {winget_pkg}")
+            } else {
+                tool.supported = false;
+                "请先安装 Scoop 或 WinGet".to_string()
+            };
+        }
+    }
+
+    SYSTEM_TOOLS_CACHE.put("all", tools.clone());
     Ok(tools)
 }
 
-#[cfg(target_os = "windows")]
-fn scoop_package_for(tool_id: &str) -> &str {
+static SYSTEM_TOOLS_CACHE: crate::cache::TtlCache<Vec<SystemTool>> =
+    crate::cache::TtlCache::new(std::time::Duration::from_secs(30));
+
+/// Called by `env_helper::OperationGuard::drop` after any mutation.
+pub(crate) fn invalidate_probe_cache() {
+    SYSTEM_TOOLS_CACHE.clear();
+}
+
+/// Single source of truth for the Windows package names used by both the
+/// displayed install command and the actual install call.
+#[cfg(any(target_os = "windows", test))]
+fn windows_packages_for(tool_id: &str) -> (&str, &str) {
     match tool_id {
-        "docker-compose" => "docker-compose",
-        "postgresql" => "postgresql",
-        "mongodb" => "mongodb",
-        "ripgrep" => "ripgrep",
-        "neovim" => "neovim",
-        _ => tool_id,
+        "git" => ("git", "Git.Git"),
+        "gh" => ("gh", "GitHub.cli"),
+        "lazygit" => ("lazygit", "JesseDuffield.lazygit"),
+        "docker" => ("docker", "Docker.DockerDesktop"),
+        "docker-compose" => ("docker-compose", "Docker.DockerCompose"),
+        "nginx" => ("nginx", "Nginx.Nginx"),
+        "redis" => ("redis", "Redis.Redis"),
+        "mysql" => ("mysql", "Oracle.MySQL"),
+        "postgresql" => ("postgresql", "PostgreSQL.PostgreSQL"),
+        "mongodb" => ("mongodb", "MongoDB.Server"),
+        "duckdb" => ("duckdb", "DuckDB.DuckDB"),
+        "ollama" => ("ollama", "Ollama.Ollama"),
+        "ripgrep" => ("ripgrep", "BurntSushi.ripgrep.MSVC"),
+        "fd" => ("fd", "sharkdp.fd"),
+        "sd" => ("sd", "chmln.sd"),
+        "ast-grep" => ("ast-grep", "ast-grep.ast-grep"),
+        "ffmpeg" => ("ffmpeg", "Gyan.FFmpeg"),
+        "imagemagick" => ("imagemagick", "ImageMagick.ImageMagick"),
+        "exiftool" => ("exiftool", "PhilHarvey.ExifTool"),
+        "yt-dlp" => ("yt-dlp", "yt-dlp.yt-dlp"),
+        "aria2" => ("aria2", "aria2.aria2"),
+        "rclone" => ("rclone", "Rclone.Rclone"),
+        "bat" => ("bat", "sharkdp.bat"),
+        "fzf" => ("fzf", "junegunn.fzf"),
+        "zoxide" => ("zoxide", "ajeetdsouza.zoxide"),
+        "jq" => ("jq", "jqlang.jq"),
+        "yq" => ("yq", "MikeFarah.yq"),
+        "pandoc" => ("pandoc", "JohnMacFarlane.Pandoc"),
+        "yazi" => ("yazi", "sxyazi.yazi"),
+        other => (other, other),
     }
 }
 
@@ -589,10 +737,12 @@ async fn probe_tool_version(tool_id: &str) -> Option<String> {
         "mysql" => ("mysql", &["--version"]),
         "postgresql" => ("psql", &["--version"]),
         "mongodb" => ("mongod", &["--version"]),
-        "neovim" => ("nvim", &["--version"]),
         "ripgrep" => ("rg", &["--version"]),
         "fd" => (fd_binary(), &["--version"]),
         "ffmpeg" => ("ffmpeg", &["-version"]),
+        "aria2" => ("aria2c", &["--version"]),
+        "imagemagick" => ("magick", &["--version"]),
+        "exiftool" => ("exiftool", &["-ver"]),
         _ => (tool_id, &["--version"]),
     };
 
@@ -686,6 +836,60 @@ async fn probe_tool_version(tool_id: &str) -> Option<String> {
                 }
             }
         }
+    } else if tool_id == "imagemagick" {
+        if let Ok(out) = env_helper::output_timeout(
+            env_helper::create_silent_tokio_command("convert").arg("-version"),
+            5,
+        )
+        .await
+        {
+            if out.status.success() {
+                let raw = String::from_utf8_lossy(&out.stdout);
+                for word in raw.split(|c: char| c.is_whitespace() || c == '/' || c == '(' || c == ')' || c == ',') {
+                    let candidate = word.trim_start_matches(|c: char| !c.is_ascii_digit());
+                    let clean: String = candidate.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                    if clean.contains('.') {
+                        return Some(clean.trim_end_matches('.').to_string());
+                    }
+                }
+            }
+        }
+    } else if tool_id == "aria2" {
+        if let Ok(out) = env_helper::output_timeout(
+            env_helper::create_silent_tokio_command("aria2").arg("--version"),
+            5,
+        )
+        .await
+        {
+            if out.status.success() {
+                let raw = String::from_utf8_lossy(&out.stdout);
+                for word in raw.split_whitespace() {
+                    let candidate = word.trim_start_matches(|c: char| !c.is_ascii_digit());
+                    let clean: String = candidate.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                    if clean.contains('.') {
+                        return Some(clean.trim_end_matches('.').to_string());
+                    }
+                }
+            }
+        }
+    } else if tool_id == "ast-grep" {
+        if let Ok(out) = env_helper::output_timeout(
+            env_helper::create_silent_tokio_command("sg").arg("--version"),
+            5,
+        )
+        .await
+        {
+            if out.status.success() {
+                let raw = String::from_utf8_lossy(&out.stdout);
+                for word in raw.split_whitespace() {
+                    let candidate = word.trim_start_matches(|c: char| !c.is_ascii_digit());
+                    let clean: String = candidate.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                    if clean.contains('.') {
+                        return Some(clean.trim_end_matches('.').to_string());
+                    }
+                }
+            }
+        }
     }
 
     None
@@ -773,9 +977,7 @@ pub async fn test_system_tool(tool_id: String) -> Result<String, String> {
         }
     }
 
-    let binary_name = if tool_id == "neovim" {
-        "nvim"
-    } else if tool_id == "ripgrep" {
+    let binary_name = if tool_id == "ripgrep" {
         "rg"
     } else if tool_id == "fd" {
         fd_binary()
@@ -785,6 +987,12 @@ pub async fn test_system_tool(tool_id: String) -> Result<String, String> {
         "mongod"
     } else if tool_id == "redis" {
         "redis-server"
+    } else if tool_id == "aria2" {
+        if env_helper::command_available("aria2c") { "aria2c" } else { "aria2" }
+    } else if tool_id == "imagemagick" {
+        if env_helper::command_available("magick") { "magick" } else { "convert" }
+    } else if tool_id == "ast-grep" {
+        if env_helper::command_available("ast-grep") { "ast-grep" } else { "sg" }
     } else {
         &tool_id
     };
@@ -792,6 +1000,7 @@ pub async fn test_system_tool(tool_id: String) -> Result<String, String> {
         env_helper::create_silent_tokio_command(binary_name).arg(match tool_id.as_str() {
             "nginx" => "-v",
             "ffmpeg" => "-version",
+            "exiftool" => "-ver",
             _ => "--version",
         }),
         5,
@@ -955,6 +1164,8 @@ read -p "按回车键退出当前窗口..."
 pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool, String> {
     let _operation = env_helper::begin_operation()?;
     env_helper::validate_target(&tool_id, "latest")?;
+    // The probe cache must not survive a mutation.
+    invalidate_probe_cache();
     // GUI applications inherit a stale PATH. Refresh it before looking for
     // Scoop/WinGet or any other package manager installed after app launch.
 
@@ -989,28 +1200,7 @@ pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool
         let has_scoop = env_helper::command_available("scoop");
         let has_winget = env_helper::command_available("winget");
 
-        let (scoop_pkg, winget_pkg): (&str, &str) = match tool_id.as_str() {
-            "git" => ("git", "Git.Git"),
-            "docker" => ("docker", "Docker.DockerDesktop"),
-            "docker-compose" => ("docker-compose", "Docker.DockerCompose"),
-            "nginx" => ("nginx", "Nginx.Nginx"),
-            "redis" => ("redis", "Redis.Redis"),
-            "mysql" => ("mysql", "Oracle.MySQL"),
-            "postgresql" => ("postgresql", "PostgreSQL.PostgreSQL"),
-            "mongodb" => ("mongodb", "MongoDB.Server"),
-            "ollama" => ("ollama", "Ollama.Ollama"),
-            "gh" => ("gh", "GitHub.cli"),
-            "ripgrep" => ("ripgrep", "BurntSushi.ripgrep.MSVC"),
-            "fd" => ("fd", "sharkdp.fd"),
-            "lazygit" => ("lazygit", "JesseDuffield.lazygit"),
-            "bat" => ("bat", "sharkdp.bat"),
-            "fzf" => ("fzf", "junegunn.fzf"),
-            "zoxide" => ("zoxide", "ajeetdsouza.zoxide"),
-            "ffmpeg" => ("ffmpeg", "Gyan.FFmpeg"),
-            "cmake" => ("cmake", "Kitware.CMake"),
-            "neovim" => ("neovim", "Neovim.Neovim"),
-            _ => (tool_id.as_str(), tool_id.as_str()),
-        };
+        let (scoop_pkg, winget_pkg) = windows_packages_for(&tool_id);
 
         let cmd_string = if has_scoop {
             let _ = app.emit("install-log", format!("使用 Scoop 极速安装 {}", scoop_pkg));
@@ -1084,7 +1274,7 @@ pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool
 
         let mut command = env_helper::create_silent_tokio_command(&brew_bin);
         command.arg("install");
-        if tool_id == "docker" {
+        if tool_id == "docker" || tool_id == "ollama" {
             command.arg("--cask");
         }
         command.arg(&tool_id);
@@ -1099,18 +1289,43 @@ pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool
             );
         }
         let manager = linux_package_manager();
-        let args = linux_install_args(manager, &tool_id)?;
-        if !env_helper::command_available("pkexec") {
-            return Err("pkexec is required for graphical administrator authorization; install policykit or use your terminal".into());
+        if manager == "none" {
+            return Err(
+                "未检测到受支持的包管理器（apt / dnf / pacman / zypper / apk / xbps），请参考发行版文档手动安装".into(),
+            );
         }
-        let mut command = env_helper::create_silent_tokio_command("pkexec");
+        let args = linux_install_args(manager, &tool_id)?;
         let executable = match manager {
             "apt" => "/usr/bin/apt-get",
             "dnf" => "/usr/bin/dnf",
             "pacman" => "/usr/bin/pacman",
+            "zypper" => "/usr/bin/zypper",
+            "apk" => "/sbin/apk",
+            "xbps" => "/usr/bin/xbps-install",
             _ => return Err("Unsupported Linux package manager".into()),
         };
-        command.arg(executable).args(args);
+        let manual_hint = format!("sudo {executable} {}", args.join(" "));
+        let mut command = if env_helper::command_available("pkexec") {
+            let mut command = env_helper::create_silent_tokio_command("pkexec");
+            command.arg(executable);
+            command
+        } else if is_root() {
+            // Containers and root shells have no polkit session at all.
+            env_helper::create_silent_tokio_command(executable)
+        } else if env_helper::command_available("sudo") {
+            let _ = app.emit(
+                "install-log",
+                "未检测到 pkexec，改用 sudo -n（需已缓存 sudo 凭据）".to_string(),
+            );
+            let mut command = env_helper::create_silent_tokio_command("sudo");
+            command.arg("-n").arg(executable);
+            command
+        } else {
+            return Err(format!(
+                "当前环境缺少 pkexec / sudo，无法图形化提权安装。请在终端手动执行：\n{manual_hint}"
+            ));
+        };
+        command.args(&args);
         stream_install(&app, command).await
     }
 }
@@ -1153,12 +1368,30 @@ pub(crate) async fn stream_install(
 }
 
 fn linux_package_manager() -> &'static str {
-    for (binary, name) in [("apt-get", "apt"), ("dnf", "dnf"), ("pacman", "pacman")] {
+    for (binary, name) in [
+        ("apt-get", "apt"),
+        ("dnf", "dnf"),
+        ("yum", "dnf"),
+        ("pacman", "pacman"),
+        ("zypper", "zypper"),
+        ("apk", "apk"),
+        ("xbps-install", "xbps"),
+    ] {
         if env_helper::command_available(binary) {
             return name;
         }
     }
     "none"
+}
+
+/// True when the process already runs as root, so elevation can be skipped.
+#[cfg(target_os = "linux")]
+fn is_root() -> bool {
+    env_helper::create_silent_command("id")
+        .arg("-u")
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim() == "0")
+        .unwrap_or(false)
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -1168,8 +1401,12 @@ fn linux_install_args(manager: &str, tool: &str) -> Result<Vec<String>, String> 
         ("apt", "redis") => "redis-server",
         ("apt", "fd") => "fd-find",
         ("apt", "mysql") => "default-mysql-server",
+        ("apt", "exiftool") => "libimage-exiftool-perl",
         ("dnf", "fd") => "fd-find",
         ("dnf", "mysql") | ("pacman", "mysql") => "mariadb",
+        ("dnf", "imagemagick") => "ImageMagick",
+        ("dnf", "exiftool") => "perl-Image-ExifTool",
+        ("pacman", "exiftool") => "perl-image-exiftool",
         (_, "mongodb" | "ollama" | "lazygit") => {
             return Err(format!(
             "{tool} requires a vendor repository; install it following the official instructions"
@@ -1180,6 +1417,9 @@ fn linux_install_args(manager: &str, tool: &str) -> Result<Vec<String>, String> 
     let prefix = match manager {
         "apt" | "dnf" => vec!["install", "-y"],
         "pacman" => vec!["-S", "--noconfirm", "--needed"],
+        "zypper" => vec!["install", "--non-interactive"],
+        "apk" => vec!["add"],
+        "xbps" => vec!["-Sy"],
         _ => return Err("Unsupported Linux package manager".into()),
     };
     Ok(prefix
@@ -1199,17 +1439,82 @@ fn has_activation(content: &str) -> bool {
     })
 }
 
-fn shell_profile(home: &std::path::Path, shell: &str) -> Result<std::path::PathBuf, String> {
+/// Profile files the current shell will actually source, most specific first.
+/// Unsupported shells yield an empty list rather than an error so the health
+/// panel can still render the rest of its checks.
+fn shell_profiles(home: &std::path::Path, shell: &str) -> Vec<std::path::PathBuf> {
     if shell.ends_with("bash") {
-        Ok(home.join(".bashrc"))
+        // macOS ships bash as a *login* shell: it sources .bash_profile /
+        // .bash_login / .profile and never .bashrc, so writing only .bashrc
+        // there silently does nothing.
+        if cfg!(target_os = "macos") {
+            let existing: Vec<_> = [".bash_profile", ".bash_login", ".profile"]
+                .iter()
+                .map(|name| home.join(name))
+                .filter(|path| path.exists())
+                .collect();
+            return if existing.is_empty() {
+                vec![home.join(".bash_profile")]
+            } else {
+                existing
+            };
+        }
+        vec![home.join(".bashrc")]
     } else if shell.ends_with("zsh") {
-        Ok(home.join(".zshrc"))
+        vec![home.join(".zshrc")]
     } else if shell.ends_with("fish") {
-        Ok(home.join(".config/fish/config.fish"))
+        vec![home.join(".config/fish/config.fish")]
     } else {
-        Err(format!(
-            "Unsupported shell: {shell}; configure Mise manually"
-        ))
+        Vec::new()
+    }
+}
+
+/// PowerShell profiles to inspect on Windows.
+///
+/// `Documents` can be redirected (OneDrive / KFM) and users may override the
+/// profile entirely, so ask PowerShell for its own `$PROFILE` values and fall
+/// back to the conventional locations only when that probe fails.
+async fn windows_shell_profiles(home: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut found: Vec<std::path::PathBuf> = Vec::new();
+    for host in ["pwsh", "powershell"] {
+        let probe = env_helper::output_timeout(
+            env_helper::create_silent_tokio_command(host).args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$PROFILE.CurrentUserAllHosts; $PROFILE.CurrentUserCurrentHost",
+            ]),
+            5,
+        )
+        .await;
+        if let Ok(output) = probe {
+            if output.status.success() {
+                for line in String::from_utf8_lossy(&output.stdout).lines() {
+                    let line = line.trim();
+                    if line.ends_with(".ps1") && !line.contains('$') {
+                        let path = std::path::PathBuf::from(line);
+                        if !found.contains(&path) {
+                            found.push(path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !found.is_empty() {
+        return found;
+    }
+    let documents = dirs::document_dir().unwrap_or_else(|| home.join("Documents"));
+    let mut candidates = Vec::new();
+    for dir in ["PowerShell", "WindowsPowerShell"] {
+        candidates.push(documents.join(dir).join("Microsoft.PowerShell_profile.ps1"));
+        candidates.push(documents.join(dir).join("profile.ps1"));
+    }
+    let existing: Vec<_> = candidates.iter().filter(|p| p.exists()).cloned().collect();
+    if existing.is_empty() {
+        candidates
+    } else {
+        existing
     }
 }
 
@@ -1224,17 +1529,13 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
         }
     });
     let profiles = if cfg!(windows) {
-        vec![
-            dirs::document_dir()
-                .unwrap_or_else(|| home.join("Documents"))
-                .join("WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
-            dirs::document_dir()
-                .unwrap_or_else(|| home.join("Documents"))
-                .join("PowerShell/Microsoft.PowerShell_profile.ps1"),
-        ]
+        windows_shell_profiles(&home).await
     } else {
-        vec![shell_profile(&home, &shell)?]
+        shell_profiles(&home, &shell)
     };
+    // A shell we cannot configure must degrade to an actionable warning instead
+    // of failing the whole command (which blanked the entire health tab).
+    let shell_supported = !profiles.is_empty();
     let activated = profiles.iter().any(|p| {
         crate::config_file::read(p)
             .map(|c| has_activation(&c))
@@ -1256,30 +1557,48 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
     } else {
         "none"
     };
-    let profile = profiles[0].display().to_string();
+    let profile = profiles
+        .first()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    let activation_status = if ready {
+        "ok"
+    } else if shell_supported {
+        "warning"
+    } else {
+        "error"
+    };
+    let activation_message = if ready {
+        "已检测到当前 Shell 的 Mise 激活配置；新终端生效".to_string()
+    } else if shell_supported {
+        "当前 Shell 尚未配置可用的 Mise 激活".to_string()
+    } else {
+        format!(
+            "EnvHub 暂不支持自动配置 {shell}。请手动在该 Shell 的启动文件中添加 `mise activate`（参考 https://mise.jdx.dev）"
+        )
+    };
     Ok(vec![
         EnvHealthCheck {
             id: "mise-activated".into(),
             title: "Shell 激活配置".into(),
-            status: if ready { "ok" } else { "warning" }.into(),
-            message: if ready {
-                "已检测到当前 Shell 的 Mise 激活配置；新终端生效"
-            } else {
-                "当前 Shell 尚未配置可用的 Mise 激活"
-            }
-            .into(),
+            status: activation_status.into(),
+            message: activation_message.clone(),
             shell: shell.clone(),
             config_file: profile.clone(),
-            can_auto_fix: !ready,
+            can_auto_fix: !ready && shell_supported,
         },
         EnvHealthCheck {
             id: "path-priority".into(),
             title: "终端版本切换配置".into(),
-            status: if ready { "ok" } else { "warning" }.into(),
-            message: "检查持久化的 Shell 激活配置，不把 GUI 进程 PATH 当作系统配置".into(),
+            status: activation_status.into(),
+            message: if shell_supported {
+                "检查持久化的 Shell 激活配置，不把 GUI 进程 PATH 当作系统配置".to_string()
+            } else {
+                activation_message
+            },
             shell: shell.clone(),
             config_file: profile,
-            can_auto_fix: !ready,
+            can_auto_fix: !ready && shell_supported,
         },
         EnvHealthCheck {
             id: "package-manager".into(),
@@ -1338,11 +1657,23 @@ pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
     {
         let hook = format!("\n# EnvHub Mise activation\n$MiseBin = '{}'\n$MiseShell = if ($PSVersionTable.PSEdition -eq 'Core') {{ 'pwsh' }} else {{ 'powershell' }}\n(& $MiseBin activate $MiseShell) | Out-String | Invoke-Expression\n", bin.to_string_lossy().replace('\'', "''"));
         let documents = dirs::document_dir().unwrap_or_else(|| home.join("Documents"));
-        for relative in [
-            "WindowsPowerShell/Microsoft.PowerShell_profile.ps1",
-            "PowerShell/Microsoft.PowerShell_profile.ps1",
-        ] {
-            let path = documents.join(relative);
+        // Use the same resolver as the health check so detection and repair
+        // never disagree about which profile is the real one.
+        let detected = windows_shell_profiles(&home).await;
+        let targets = if detected.is_empty() {
+            vec![
+                documents.join("WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
+                documents.join("PowerShell/Microsoft.PowerShell_profile.ps1"),
+            ]
+        } else {
+            detected
+        };
+        // Only the host-specific profiles are written: `profile.ps1` would run in
+        // addition to them and double-activate mise.
+        for path in targets {
+            if path.file_name().map(|n| n != "Microsoft.PowerShell_profile.ps1") == Some(true) {
+                continue;
+            }
             let old = crate::config_file::read(&path)?;
             if !old.contains(&hook) {
                 crate::config_file::write(&path, &(old + &hook))?;
@@ -1352,8 +1683,13 @@ pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
     #[cfg(not(target_os = "windows"))]
     {
         let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into());
-        let path = shell_profile(&home, &shell)?;
-        let old = crate::config_file::read(&path)?;
+        let profiles = shell_profiles(&home, &shell);
+        let Some(path) = profiles.first() else {
+            return Err(format!(
+                "暂不支持自动配置 {shell}，请手动在其启动文件中添加 `mise activate`"
+            ));
+        };
+        let old = crate::config_file::read(path)?;
         let quoted = env_helper::shell_quote(&bin.to_string_lossy());
         let hook = if shell.ends_with("fish") {
             format!("\n# EnvHub Mise activation\n{quoted} activate fish | source\n")
@@ -1369,7 +1705,7 @@ pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
         };
         // An absolute invocation also repairs old hooks whose `mise` is absent from PATH.
         if !old.contains(&hook) {
-            crate::config_file::write(&path, &(old + &hook))?;
+            crate::config_file::write(path, &(old + &hook))?;
         }
     }
     Ok(true)
@@ -1426,5 +1762,41 @@ mod tests {
             ["-S", "--noconfirm", "--needed", "mariadb"]
         );
         assert!(linux_install_args("none", "git").is_err());
+    }
+
+    #[test]
+    fn linux_install_args_supports_extra_distributions() {
+        assert_eq!(
+            linux_install_args("zypper", "git").unwrap(),
+            ["install", "--non-interactive", "git"]
+        );
+        assert_eq!(linux_install_args("apk", "git").unwrap(), ["add", "git"]);
+        assert_eq!(linux_install_args("xbps", "git").unwrap(), ["-Sy", "git"]);
+        // Vendor-repository-only tools stay unsupported everywhere.
+        assert!(linux_install_args("zypper", "mongodb").is_err());
+    }
+
+    #[test]
+    fn windows_package_table_maps_known_tools_and_falls_back_to_id() {
+        assert_eq!(windows_packages_for("ripgrep"), ("ripgrep", "BurntSushi.ripgrep.MSVC"));
+        assert_eq!(windows_packages_for("git"), ("git", "Git.Git"));
+        assert_eq!(windows_packages_for("unknown-tool"), ("unknown-tool", "unknown-tool"));
+    }
+
+    #[test]
+    fn bash_profile_is_never_bashrc_on_macos() {
+        let home = tempfile::tempdir().unwrap();
+        let profiles = shell_profiles(home.path(), "/bin/bash");
+        assert_eq!(profiles.len(), 1);
+        if cfg!(target_os = "macos") {
+            assert!(profiles[0].ends_with(".bash_profile"));
+        } else {
+            assert!(profiles[0].ends_with(".bashrc"));
+        }
+        assert!(shell_profiles(home.path(), "/usr/bin/zsh")[0].ends_with(".zshrc"));
+        assert!(shell_profiles(home.path(), "/usr/bin/fish")[0]
+            .ends_with("config.fish"));
+        // Unsupported shells degrade to an empty list instead of an error.
+        assert!(shell_profiles(home.path(), "/usr/bin/nu").is_empty());
     }
 }

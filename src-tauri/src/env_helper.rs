@@ -16,6 +16,15 @@ pub struct OperationGuard {
 impl Drop for OperationGuard {
     fn drop(&mut self) {
         ACTIVE_INSTALL_PID.store(0, Ordering::SeqCst);
+        // Every mutation funnels through this guard, so dropping the probe
+        // caches here guarantees the next read reflects the new state instead
+        // of a mid-install snapshot. Done on drop (not on acquire) so failed
+        // operations also invalidate.
+        crate::commands::mise::invalidate_probe_cache();
+        crate::commands::system::invalidate_probe_cache();
+        // A mutation may have created `~/.local/bin/mise`, the shims dir, a new
+        // package-manager prefix, ... so the memoised PATH / binary are stale.
+        invalidate_path_caches();
     }
 }
 
@@ -172,52 +181,237 @@ pub fn fix_system_path() {
     env::set_var("PATH", augmented_path());
 }
 
+/// `augmented_path()` costs ~25 `Path::exists()` stats plus a PATH rebuild, and
+/// every single process spawn calls it. Cache it; `invalidate_path_caches()`
+/// (from `OperationGuard::drop`) refreshes it after anything installs a tool.
+static AUGMENTED_PATH: std::sync::Mutex<Option<std::ffi::OsString>> = std::sync::Mutex::new(None);
+static MISE_BINARY: std::sync::Mutex<Option<Option<PathBuf>>> = std::sync::Mutex::new(None);
+
+/// Drop the memoised PATH / mise binary so the next call re-probes the disk.
+pub fn invalidate_path_caches() {
+    if let Ok(mut guard) = AUGMENTED_PATH.lock() {
+        *guard = None;
+    }
+    if let Ok(mut guard) = MISE_BINARY.lock() {
+        *guard = None;
+    }
+}
+
 fn augmented_path() -> std::ffi::OsString {
-    let mut paths: Vec<PathBuf> = Vec::new();
+    if let Ok(guard) = AUGMENTED_PATH.lock() {
+        if let Some(cached) = guard.as_ref() {
+            return cached.clone();
+        }
+    }
+    let computed = compute_augmented_path();
+    if let Ok(mut guard) = AUGMENTED_PATH.lock() {
+        *guard = Some(computed.clone());
+    }
+    computed
+}
 
-    // 1. Highest priority: User version manager shims and local binaries
+/// Highest installed version inside a version-managed directory.
+///
+/// `nvm` does not create a `current` symlink — binaries live in
+/// `~/.nvm/versions/node/v22.12.0/bin`, so the newest version has to be picked
+/// explicitly.
+fn latest_versioned_dir(base: &std::path::Path) -> Option<PathBuf> {
+    let mut best: Option<(Vec<u32>, PathBuf)> = None;
+    for entry in std::fs::read_dir(base).ok()?.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        let key: Vec<u32> = name
+            .trim_start_matches('v')
+            .split('.')
+            .map_while(|part| part.parse::<u32>().ok())
+            .collect();
+        if key.is_empty() {
+            continue;
+        }
+        if best.as_ref().map(|(k, _)| key > *k).unwrap_or(true) {
+            best = Some((key, path));
+        }
+    }
+    best.map(|(_, path)| path)
+}
+
+/// Parse `reg query ... /v Path` output into the raw PATH string.
+///
+/// The output looks like:
+/// ```text
+/// HKEY_CURRENT_USER\Environment
+///     Path    REG_EXPAND_SZ    C:\Users\me\AppData\Local\...;C:\tools
+/// ```
+/// The value itself may contain spaces, so only the first two tokens are split.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn parse_reg_query_output(stdout: &str) -> Option<String> {
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("Path").or_else(|| trimmed.strip_prefix("PATH")) else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let (kind, value) = rest.split_once(char::is_whitespace)?;
+        if !kind.starts_with("REG_") {
+            continue;
+        }
+        let value = value.trim_start();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// Expand `%USERPROFILE%` style references, which `REG_EXPAND_SZ` PATH values
+/// are full of. Unknown variables are left untouched.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn expand_windows_env(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let bytes = raw.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if let Some(offset) = raw[i + 1..].find('%') {
+                let name = &raw[i + 1..i + 1 + offset];
+                if !name.is_empty() {
+                    if let Ok(value) = std::env::var(name) {
+                        out.push_str(&value);
+                        i = i + 1 + offset + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        let ch = raw[i..].chars().next().unwrap_or('%');
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// Read the persistent PATH from the Windows registry.
+///
+/// `winget`, `scoop` and most installers append to `HKCU\Environment\Path`, but
+/// a process keeps the PATH it inherited at launch — so a tool installed from
+/// EnvHub would stay invisible until the app restarted. Re-reading the registry
+/// is what makes a freshly installed tool usable immediately.
+#[cfg(target_os = "windows")]
+fn windows_registry_paths() -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for key in [
+        "HKCU\\Environment",
+        "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+    ] {
+        let output = std::process::Command::new("reg")
+            .args(["query", key, "/v", "Path"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        let Ok(output) = output else { continue };
+        if !output.status.success() {
+            continue;
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if let Some(raw) = parse_reg_query_output(&stdout) {
+            for entry in expand_windows_env(&raw).split(';') {
+                let entry = entry.trim();
+                if !entry.is_empty() {
+                    found.push(PathBuf::from(entry));
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Directories that package managers and version managers install into but
+/// which are frequently missing from a GUI process' inherited PATH.
+fn well_known_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+
     if let Some(home) = dirs::home_dir() {
-        let user_paths = [
-            home.join(".local/share/mise/shims"),
-            home.join(".local/share/mise/bin"),
-            home.join(".cargo/bin"),
-            home.join(".local/bin"),
-            home.join("go/bin"),
-            home.join(".go/bin"),
-            home.join(".bun/bin"),
-            home.join(".deno/bin"),
-            home.join(".nvm/current/bin"),
-            home.join(".proto/shims"),
-            home.join(".proto/bin"),
-            home.join("scoop/shims"),
-            home.join("scoop/apps"),
-        ];
+        // Version-manager shims and per-user bin dirs. Highest priority: they
+        // must win over `/usr/bin` so a pinned toolchain is what runs.
+        for rel in [
+            ".local/share/mise/shims",
+            ".local/share/mise/bin",
+            ".local/bin",
+            ".cargo/bin",
+            ".bun/bin",
+            ".deno/bin",
+            ".proto/shims",
+            ".proto/bin",
+            ".asdf/shims",
+            ".pyenv/shims",
+            ".volta/bin",
+            "go/bin",
+            ".go/bin",
+            "Library/pnpm",
+            ".local/share/pnpm",
+            ".nix-profile/bin",
+            "scoop/shims",
+            ".dotnet/tools",
+            ".pyenv/pyenv-win/bin",
+            ".pyenv/pyenv-win/shims",
+        ] {
+            let path = home.join(rel);
+            if path.exists() && !dirs.contains(&path) {
+                dirs.push(path);
+            }
+        }
 
-        for up in user_paths {
-            if up.exists() && !paths.contains(&up) {
-                paths.push(up);
+        // nvm keeps no `current` symlink; resolve the newest installed version.
+        if let Some(newest) = latest_versioned_dir(&home.join(".nvm/versions/node")) {
+            let bin = newest.join("bin");
+            if bin.exists() && !dirs.contains(&bin) {
+                dirs.push(bin);
             }
         }
     }
 
-    // Windows specific AppData paths
-    if let Some(data_local) = dirs::data_local_dir() {
-        let win_user_paths = [
-            data_local.join("mise/shims"),
-            data_local.join("mise/bin"),
-            data_local.join("Programs/Python/Python312"),
-            data_local.join("Programs/Python/Python311"),
-            data_local.join("Microsoft/WinGet/Links"),
-            data_local.join("Microsoft/WindowsApps"),
-        ];
-        for wp in win_user_paths {
-            if wp.exists() && !paths.contains(&wp) {
-                paths.push(wp);
+    // Windows per-user locations (%LOCALAPPDATA%).
+    if let Some(local) = dirs::data_local_dir() {
+        for rel in [
+            "mise/shims",
+            "mise/bin",
+            "Microsoft/WinGet/Links",
+            "Microsoft/WindowsApps",
+            "pnpm",
+            "Volta/bin",
+            "Yarn/bin",
+            "Programs/Python/Python313",
+            "Programs/Python/Python313/Scripts",
+            "Programs/Python/Python312",
+            "Programs/Python/Python312/Scripts",
+            "Programs/Python/Python311",
+            "Programs/Python/Python311/Scripts",
+        ] {
+            let path = local.join(rel);
+            if path.exists() && !dirs.contains(&path) {
+                dirs.push(path);
             }
         }
     }
 
-    // 2. Standard UNIX / Homebrew / Language / Windows Program Files standard paths
+    // `npm i -g` installs to %APPDATA%\npm on Windows.
+    if let Some(appdata) = dirs::config_dir() {
+        let npm = appdata.join("npm");
+        if npm.exists() && !dirs.contains(&npm) {
+            dirs.push(npm);
+        }
+    }
+
+    dirs
+}
+
+fn compute_augmented_path() -> std::ffi::OsString {
+    let mut paths: Vec<PathBuf> = well_known_dirs();
+
+    // 2. System-wide locations. Homebrew and the language runtimes installed by
+    //    their official installers land here.
     let candidate_paths = [
         "/opt/homebrew/bin",
         "/opt/homebrew/sbin",
@@ -226,6 +420,8 @@ fn augmented_path() -> std::ffi::OsString {
         "/opt/homebrew/opt/go/libexec/bin",
         "/opt/homebrew/opt/openjdk/bin",
         "/usr/local/opt/openjdk/bin",
+        "/nix/var/nix/profiles/default/bin",
+        "/snap/bin",
         "/usr/bin",
         "/bin",
         "/usr/sbin",
@@ -234,6 +430,7 @@ fn augmented_path() -> std::ffi::OsString {
         "C:\\Program Files\\Go\\bin",
         "C:\\Program Files\\Git\\cmd",
         "C:\\Program Files\\Docker\\Docker\\resources\\bin",
+        "C:\\Program Files\\Microsoft VS Code\\bin",
         "C:\\ProgramData\\chocolatey\\bin",
     ];
 
@@ -244,10 +441,19 @@ fn augmented_path() -> std::ffi::OsString {
         }
     }
 
-    // 3. Existing PATH elements
+    // 3. Persistent PATH from the registry (Windows only): picks up whatever
+    //    winget/scoop/an installer appended since this process started.
+    #[cfg(target_os = "windows")]
+    for p in windows_registry_paths() {
+        if !paths.contains(&p) {
+            paths.push(p);
+        }
+    }
+
+    // 4. Whatever this process inherited.
     if let Ok(current_path) = env::var("PATH") {
         for split_path in env::split_paths(&current_path) {
-            if !paths.contains(&split_path) {
+            if !split_path.as_os_str().is_empty() && !paths.contains(&split_path) {
                 paths.push(split_path);
             }
         }
@@ -258,6 +464,19 @@ fn augmented_path() -> std::ffi::OsString {
 
 /// Find the full path to the `mise` binary
 pub fn find_mise_binary() -> Option<PathBuf> {
+    if let Ok(guard) = MISE_BINARY.lock() {
+        if let Some(cached) = guard.as_ref() {
+            return cached.clone();
+        }
+    }
+    let found = probe_mise_binary();
+    if let Ok(mut guard) = MISE_BINARY.lock() {
+        *guard = Some(found.clone());
+    }
+    found
+}
+
+fn probe_mise_binary() -> Option<PathBuf> {
     if let Some(path) = custom_mise_path() {
         return Some(path);
     }
@@ -388,6 +607,90 @@ pub fn command_available(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_reg_query_path_value_with_spaces() {
+        let stdout = "\r\nHKEY_CURRENT_USER\\Environment\r\n    Path    REG_EXPAND_SZ    %USERPROFILE%\\AppData\\Local\\Microsoft\\WinGet\\Links;C:\\Program Files\\Tools\\bin\r\n\r\n";
+        assert_eq!(
+            parse_reg_query_output(stdout).as_deref(),
+            Some("%USERPROFILE%\\AppData\\Local\\Microsoft\\WinGet\\Links;C:\\Program Files\\Tools\\bin")
+        );
+    }
+
+    #[test]
+    fn reg_query_parser_ignores_other_values() {
+        // `reg query` prints every value when /v is omitted, and a missing key
+        // yields an error message rather than a value.
+        let stdout = "HKEY_CURRENT_USER\\Environment\r\n    TEMP    REG_EXPAND_SZ    %USERPROFILE%\\AppData\\Local\\Temp\r\n";
+        assert_eq!(parse_reg_query_output(stdout), None);
+        assert_eq!(parse_reg_query_output("ERROR: The system was unable to find the specified registry key or value.\r\n"), None);
+    }
+
+    #[test]
+    fn expands_windows_env_references() {
+        std::env::set_var("ENVHUB_TEST_ROOT", "C:\\root");
+        assert_eq!(
+            expand_windows_env("%ENVHUB_TEST_ROOT%\\bin;%NOPE_MISSING%\\x"),
+            "C:\\root\\bin;%NOPE_MISSING%\\x"
+        );
+        // A lone % must not panic or swallow the rest of the string.
+        assert_eq!(expand_windows_env("100%\\bin"), "100%\\bin");
+        std::env::remove_var("ENVHUB_TEST_ROOT");
+    }
+
+    #[test]
+    fn picks_highest_nvm_version() {
+        let dir = tempfile::tempdir().unwrap();
+        for version in ["v20.9.0", "v22.12.0", "v22.9.1", "not-a-version"] {
+            std::fs::create_dir(dir.path().join(version)).unwrap();
+        }
+        std::fs::write(dir.path().join("v99.0.0"), "").unwrap(); // a file, not a dir
+        let picked = latest_versioned_dir(dir.path()).unwrap();
+        assert_eq!(picked.file_name().unwrap(), "v22.12.0");
+    }
+
+    #[test]
+    fn missing_version_dir_is_not_an_error() {
+        assert!(latest_versioned_dir(std::path::Path::new("/nonexistent-envhub")).is_none());
+    }
+
+    #[test]
+    fn augmented_path_puts_shims_before_system_bins() {
+        let path = augmented_path();
+        let entries: Vec<PathBuf> = std::env::split_paths(&path).collect();
+        // Deduplicated and non-empty, and /usr/bin never precedes a shims dir.
+        assert!(entries.iter().all(|p| !p.as_os_str().is_empty()));
+        let mut sorted = entries.clone();
+        sorted.dedup();
+        assert_eq!(sorted.len(), entries.len(), "duplicate entries in PATH");
+        let first_system = entries.iter().position(|p| p == std::path::Path::new("/usr/bin"));
+        let last_shim = entries
+            .iter()
+            .rposition(|p| p.to_string_lossy().contains("shims"));
+        if let (Some(system), Some(shim)) = (first_system, last_shim) {
+            assert!(shim < system, "shims must outrank /usr/bin");
+        }
+    }
+
+    /// Whatever a package manager dropped on disk must actually reach the PATH
+    /// we hand to child processes — this is the invariant that broke for
+    /// `~/Library/pnpm` and `~/.nvm/versions/node/*/bin`.
+    #[test]
+    fn every_existing_well_known_dir_is_on_the_path() {
+        let entries: Vec<PathBuf> = std::env::split_paths(&augmented_path()).collect();
+        let mut checked = 0;
+        for dir in well_known_dirs() {
+            assert!(
+                entries.contains(&dir),
+                "well-known dir missing from PATH: {}",
+                dir.display()
+            );
+            checked += 1;
+        }
+        // Guard against the list silently becoming empty on a misconfigured box.
+        assert!(checked > 0, "no well-known dirs discovered at all");
+    }
+
     #[test]
     fn invalid_targets_rejected() {
         for version in ["../outside", "-force", "1;exit", "$(id)"] {
