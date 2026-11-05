@@ -5,11 +5,27 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      force:
+        description: '强制重新发布当前 package.json 版本（覆盖已存在的 Release 资源）'
+        type: boolean
+        default: false
+
+# Serialise releases. Without this, two quick pushes to main both start a
+# 3-platform build and race to create/update the same tag's release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
     permissions:
       contents: write
+    # Consumed by the `changelog` job below. A matrix job reports the last
+    # finished leg's outputs; every leg computes the same values.
+    outputs:
+      tag: ${{ steps.guard.outputs.tag }}
+      released: ${{ steps.guard.outputs.exists == 'false' || inputs.force }}
     strategy:
       fail-fast: false
       matrix:
@@ -17,72 +33,159 @@ jobs:
           - platform: 'macos-latest'
             args: '--target universal-apple-darwin'
           - platform: 'ubuntu-22.04'
-            args: ''
+            # AppImage (免安装便携) + deb (Debian/Ubuntu)。去掉 rpm：Fedora 用户极少，
+            # 而且每多一个 bundle 就多一段构建时间。
+            args: '--bundles appimage,deb'
           - platform: 'windows-latest'
-            args: ''
+            # NSIS only. The .msi (WiX) leg builds a second copy of the same
+            # installer, adds ~5 minutes to every release, and users only ever
+            # grab the setup.exe. `bundle.targets` in tauri.conf.json stays
+            # "all" so macOS/Linux are unaffected — this flag only overrides
+            # the Windows leg.
+            args: '--bundles nsis'
 
     runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Verify version consistency
+        shell: bash
+        run: |
+          set -euo pipefail
+          PKG=$(node -p "require('./package.json').version")
+          CONF=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          CARGO=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n1)
+          echo "package.json=$PKG tauri.conf.json=$CONF Cargo.toml=$CARGO"
+          if [ "$PKG" != "$CONF" ] || [ "$PKG" != "$CARGO" ]; then
+            echo "::error::Version mismatch — package.json, tauri.conf.json and Cargo.toml must agree, otherwise the tag and the shipped binary disagree."
+            exit 1
+          fi
+
+      # A release must map 1:1 to a commit. Re-running the workflow for a version
+      # that is already published silently overwrites its assets with binaries
+      # built from a different commit (this is what happened to v0.2.16/v0.2.18),
+      # so refuse to do it unless a human explicitly asks.
+      - name: Skip if this version is already released
+        id: guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="v$(node -p "require('./package.json').version")"
+          if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG" || true)" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Release skipped::$TAG is already published. Bump the version in package.json / tauri.conf.json / Cargo.toml to release, or run the workflow manually with force=true."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
       - name: Install Rust stable
+        if: steps.guard.outputs.exists == 'false' || inputs.force
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
+      - name: Cache Rust build
+        if: steps.guard.outputs.exists == 'false' || inputs.force
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          key: ${{ matrix.platform }}
+
       - name: Install dependencies (Ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-22.04' && (steps.guard.outputs.exists == 'false' || inputs.force)
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libgtk-3-dev
 
       - name: Setup Node.js
+        if: steps.guard.outputs.exists == 'false' || inputs.force
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'npm'
 
-      - name: Get app version
-        id: get_version
-        shell: bash
-        run: |
-          VERSION=$(node -p "require('./package.json').version")
-          echo "version=v$VERSION" >> $GITHUB_OUTPUT
-
+      # `npm ci` only: the previous `|| npm install` fallback hid lockfile drift
+      # and silently rebuilt against different dependency versions than the ones
+      # that were tested locally.
       - name: Install frontend dependencies
-        run: npm ci || npm install
+        if: steps.guard.outputs.exists == 'false' || inputs.force
+        run: npm ci
 
       - name: Build Tauri Desktop Application
+        if: steps.guard.outputs.exists == 'false' || inputs.force
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ steps.get_version.outputs.version }}
-          releaseName: 'EnvHub ${{ steps.get_version.outputs.version }}'
+          tagName: ${{ steps.guard.outputs.tag }}
+          releaseName: 'EnvHub ${{ steps.guard.outputs.tag }}'
+          # Placeholder only: the `changelog` job rewrites title + body from the
+          # commit log once all three platforms have uploaded their assets. It
+          # deliberately carries no feature list — that went stale (it still
+          # advertised Nginx and Ollama after both were removed).
           releaseBody: |
-            🚀 **EnvHub - 跨平台极速开发环境与版本管理套件**
+            ### 📦 下载对应系统安装包
 
-            ### 📦 下载对应系统安装包：
-            - 🍏 **macOS (Universal 架构 - 同时兼容 Apple Silicon M系列与 Intel 芯片)**: `*.dmg`
-            - 🪟 **Windows (x64)**: `*.msi` / `*.exe`
-            - 🐧 **Linux (x64)**: `*.AppImage` / `*.deb`
+            | 平台 | 文件 |
+            | --- | --- |
+            | 🍏 macOS (Universal，同时兼容 Apple Silicon 与 Intel) | `*.dmg` |
+            | 🪟 Windows (x64) | `*-setup.exe` |
+            | 🐧 Linux (x64) | `*.AppImage` / `*.deb` |
 
-            ---
+            ### ⚠️ macOS 提示「已损坏，无法打开」
 
-            ### ⚠️ macOS 提示「已损坏，无法打开」解决办法：
-            由于开源客户端未购买 Apple 商业签名证书，首次从浏览器下载安装后 macOS Gatekeeper 会提示已损坏拦截。
-            请将软件拖入「应用程序」后，打开系统「终端 (Terminal)」，粘贴并执行以下命令即可正常秒开：
+            开源客户端未购买 Apple 商业签名证书，首次从浏览器下载安装后 Gatekeeper 会拦截。
+            把软件拖入「应用程序」后，在「终端」执行：
+
             ```bash
             sudo xattr -rd com.apple.quarantine /Applications/EnvHub.app
             ```
 
-            ---
+            ### ⚠️ Windows SmartScreen 提示
 
-            ### ✨ 核心功能亮点：
-            - ⚡ **多语言极速管理（18 种主流语言）**：Node.js、Python、Go、Rust、Java、Ruby、Bun、Deno、PHP、Zig、.NET、Dart、Flutter、Kotlin、Elixir、Erlang、Lua、Terraform
-            - 🛠️ **系统核心与数据库**：Git, Docker, Docker Compose, Nginx, Redis, MySQL, PostgreSQL, MongoDB, Ollama, gh, ripgrep, fd, lazygit 等
-            - 🌐 **国内镜像源高速测速**：NPM / Pip / Cargo / GoProxy / Docker Hub / Maven / Composer / RubyGems 一键加速
-            - 🩺 **环境健康诊断**：实时排查并一键自动修复终端 Shell RC 与 Shims PATH
+            安装包未做代码签名，首次运行可能出现「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」即可。
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+  # Runs after every platform has uploaded, so tauri-action cannot overwrite the
+  # generated notes afterwards. Title is a fixed `EnvHub v<version>`; the body is
+  # derived from the commits between the previous tag and this one.
+  changelog:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Generate release notes from commits
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/generate-release-notes.sh \
+            '${{ needs.release.outputs.tag }}' \
+            "$RUNNER_TEMP/notes.md"
+          echo '----- generated notes -----'
+          cat "$RUNNER_TEMP/notes.md"
+
+      - name: Update release title and notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG='${{ needs.release.outputs.tag }}'
+          gh release edit "$TAG" \
+            --title "EnvHub $TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md"
+          echo "::notice title=Release updated::$TAG title and notes set from commit log."
