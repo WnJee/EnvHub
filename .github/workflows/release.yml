@@ -1,18 +1,32 @@
 name: 'Release EnvHub'
 
+# Triggered by pushing a version tag, not by pushes to main: a release must map
+# 1:1 to a commit, and pushing to main used to re-run the whole 3-platform build
+# for whatever version happened to be in package.json (v0.2.16 and v0.2.18 each
+# got rebuilt several times, overwriting their published assets with binaries
+# from a different commit).
+#
+#   git tag v0.2.23 && git push origin v0.2.23
+#
 on:
   push:
-    branches:
-      - main
+    tags:
+      # Glob only; the exact `vX.Y.Z` shape is enforced by the "Resolve tag"
+      # step, which fails the run on anything else.
+      - 'v*'
   workflow_dispatch:
     inputs:
+      tag:
+        description: '要重新发布的 tag（必须已存在，例如 v0.2.22）'
+        required: true
+        type: string
       force:
-        description: '强制重新发布当前 package.json 版本（覆盖已存在的 Release 资源）'
+        description: '已发布也强制重建（覆盖现有 Release 的资源）'
         type: boolean
         default: false
 
-# Serialise releases. Without this, two quick pushes to main both start a
-# 3-platform build and race to create/update the same tag's release.
+# Serialise releases per tag. Without this, two runs for the same tag both start
+# a 3-platform build and race to upload into the same release.
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
@@ -24,8 +38,8 @@ jobs:
     # Consumed by the `changelog` job below. A matrix job reports the last
     # finished leg's outputs; every leg computes the same values.
     outputs:
-      tag: ${{ steps.guard.outputs.tag }}
-      released: ${{ steps.guard.outputs.exists == 'false' || inputs.force }}
+      tag: ${{ steps.tag.outputs.tag }}
+      released: ${{ steps.guard.outputs.released }}
     strategy:
       fail-fast: false
       matrix:
@@ -50,58 +64,105 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
+          else
+            TAG="$REF_NAME"
+          fi
+          case "$TAG" in
+            v[0-9]*) ;;
+            *)
+              echo "::error::tag must look like vX.Y.Z (got '$TAG')"
+              exit 1
+              ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
       - name: Verify version consistency
         shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           PKG=$(node -p "require('./package.json').version")
           CONF=$(node -p "require('./src-tauri/tauri.conf.json').version")
           CARGO=$(sed -n 's/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n1)
-          echo "package.json=$PKG tauri.conf.json=$CONF Cargo.toml=$CARGO"
+          echo "tag=$TAG package.json=$PKG tauri.conf.json=$CONF Cargo.toml=$CARGO"
           if [ "$PKG" != "$CONF" ] || [ "$PKG" != "$CARGO" ]; then
             echo "::error::Version mismatch — package.json, tauri.conf.json and Cargo.toml must agree, otherwise the tag and the shipped binary disagree."
             exit 1
           fi
+          if [ "v$PKG" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match package.json version $PKG. Bump the version and commit it before tagging."
+            exit 1
+          fi
 
-      # A release must map 1:1 to a commit. Re-running the workflow for a version
-      # that is already published silently overwrites its assets with binaries
-      # built from a different commit (this is what happened to v0.2.16/v0.2.18),
-      # so refuse to do it unless a human explicitly asks.
-      - name: Skip if this version is already released
+      # A published release must never be rebuilt implicitly: re-running for an
+      # existing tag silently replaces its assets with binaries from a different
+      # commit (this is what happened to v0.2.16/v0.2.18). Drafts are fine to
+      # resume — a previous attempt that died mid-upload leaves one behind.
+      - name: Skip if this version is already published
         id: guard
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
-          TAG="v$(node -p "require('./package.json').version")"
-          if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG" || true)" ]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Release skipped::$TAG is already published. Bump the version in package.json / tauri.conf.json / Cargo.toml to release, or run the workflow manually with force=true."
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+          # `gh api` prints the 404 body to *stdout* and exits non-zero, so the
+          # result must be branched on the exit code — `$(cmd || echo missing)`
+          # would concatenate the JSON and "missing" into one bogus string.
+          if draft=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.draft' 2>/dev/null); then
+            case "$draft" in
+              false)
+                if [ "$FORCE" != "true" ]; then
+                  echo "released=false" >> "$GITHUB_OUTPUT"
+                  echo "::notice title=Release skipped::$TAG is already published. Re-run the workflow manually with force=true to overwrite it, or push a new tag."
+                  exit 0
+                fi
+                ;;
+              true)
+                # A previous attempt died mid-upload; keep the draft and resume.
+                ;;
+              *)
+                echo "::error::Unexpected GitHub API response for $TAG: '$draft'"
+                exit 1
+                ;;
+            esac
           fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "released=true" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust stable
-        if: steps.guard.outputs.exists == 'false' || inputs.force
+        if: steps.guard.outputs.released == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Cache Rust build
-        if: steps.guard.outputs.exists == 'false' || inputs.force
+        if: steps.guard.outputs.released == 'true'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
           key: ${{ matrix.platform }}
 
       - name: Install dependencies (Ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04' && (steps.guard.outputs.exists == 'false' || inputs.force)
+        if: matrix.platform == 'ubuntu-22.04' && steps.guard.outputs.released == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libgtk-3-dev
 
       - name: Setup Node.js
-        if: steps.guard.outputs.exists == 'false' || inputs.force
+        if: steps.guard.outputs.released == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -111,17 +172,17 @@ jobs:
       # and silently rebuilt against different dependency versions than the ones
       # that were tested locally.
       - name: Install frontend dependencies
-        if: steps.guard.outputs.exists == 'false' || inputs.force
+        if: steps.guard.outputs.released == 'true'
         run: npm ci
 
       - name: Build Tauri Desktop Application
-        if: steps.guard.outputs.exists == 'false' || inputs.force
+        if: steps.guard.outputs.released == 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ steps.guard.outputs.tag }}
-          releaseName: 'EnvHub ${{ steps.guard.outputs.tag }}'
+          tagName: ${{ steps.tag.outputs.tag }}
+          releaseName: 'EnvHub ${{ steps.tag.outputs.tag }}'
           # Placeholder only: the `changelog` job rewrites title + body from the
           # commit log once all three platforms have uploaded their assets. It
           # deliberately carries no feature list — that went stale (it still
@@ -147,18 +208,19 @@ jobs:
             ### ⚠️ Windows SmartScreen 提示
 
             安装包未做代码签名，首次运行可能出现「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」即可。
-          # Draft until every platform has uploaded: with `false` the release
-          # goes public as soon as the *first* leg finishes uploading, so a
-          # failing leg (v0.2.21: Windows) left a public release with no Windows
-          # installer. The `changelog` job flips it to published only when all
-          # three legs succeeded.
+          # Draft until every platform has uploaded: with `false` the release goes
+          # public as soon as the *first* leg finishes uploading, so a failing leg
+          # (v0.2.21: Windows) left a public release with no Windows installer.
+          # The `changelog` job flips it to published only when all legs succeeded.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
 
   # Runs after every platform has uploaded, so tauri-action cannot overwrite the
   # generated notes afterwards. Title is a fixed `EnvHub v<version>`; the body is
-  # derived from the commits between the previous tag and this one.
+  # derived from the commits between the previous tag and this one. This job is
+  # also the publish step — if any platform leg fails, it never runs and the
+  # release stays a draft.
   changelog:
     needs: release
     if: needs.release.outputs.released == 'true'
@@ -183,7 +245,7 @@ jobs:
           echo '----- generated notes -----'
           cat "$RUNNER_TEMP/notes.md"
 
-      - name: Update release title and notes
+      - name: Publish release with generated notes
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
