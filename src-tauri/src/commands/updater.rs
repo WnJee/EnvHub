@@ -563,7 +563,7 @@ pub async fn download_and_install_update(
         if !header.starts_with(b"MZ") {
             return Err("Invalid Windows installer".into());
         }
-        session.keep();
+        let _ = session.keep();
         *PENDING_UPDATE.lock().map_err(|e| e.to_string())? = Some(target.clone());
         let _ = app.emit("update-download-progress", 100);
         Ok(target.to_string_lossy().into_owned())

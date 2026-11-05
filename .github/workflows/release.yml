@@ -147,7 +147,12 @@ jobs:
             ### ⚠️ Windows SmartScreen 提示
 
             安装包未做代码签名，首次运行可能出现「Windows 已保护你的电脑」，点「更多信息」→「仍要运行」即可。
-          releaseDraft: false
+          # Draft until every platform has uploaded: with `false` the release
+          # goes public as soon as the *first* leg finishes uploading, so a
+          # failing leg (v0.2.21: Windows) left a public release with no Windows
+          # installer. The `changelog` job flips it to published only when all
+          # three legs succeeded.
+          releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
 
@@ -185,7 +190,10 @@ jobs:
         run: |
           set -euo pipefail
           TAG='${{ needs.release.outputs.tag }}'
+          # `--draft=false` is the publish step: it only happens once all three
+          # platform legs have uploaded their assets.
           gh release edit "$TAG" \
             --title "EnvHub $TAG" \
-            --notes-file "$RUNNER_TEMP/notes.md"
-          echo "::notice title=Release updated::$TAG title and notes set from commit log."
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --draft=false
+          echo "::notice title=Release published::$TAG published with generated notes."

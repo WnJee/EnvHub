@@ -1650,24 +1650,32 @@ pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
     }
     let home = dirs::home_dir().ok_or("Cannot locate home directory")?;
     let bin = env_helper::find_mise_binary().ok_or("Install Mise first")?;
-    let _guard = crate::config_file::CONFIG_LOCK
-        .lock()
-        .map_err(|e| e.to_string())?;
+    // `windows_shell_profiles` is async. Resolve the target list *before* taking
+    // CONFIG_LOCK: `std::sync::MutexGuard` is not `Send`, so holding it across an
+    // `.await` makes this command's future non-Send and fails to compile on
+    // Windows only (tauri::command requires `Future + Send`).
     #[cfg(target_os = "windows")]
-    {
-        let hook = format!("\n# EnvHub Mise activation\n$MiseBin = '{}'\n$MiseShell = if ($PSVersionTable.PSEdition -eq 'Core') {{ 'pwsh' }} else {{ 'powershell' }}\n(& $MiseBin activate $MiseShell) | Out-String | Invoke-Expression\n", bin.to_string_lossy().replace('\'', "''"));
+    let targets = {
         let documents = dirs::document_dir().unwrap_or_else(|| home.join("Documents"));
         // Use the same resolver as the health check so detection and repair
         // never disagree about which profile is the real one.
         let detected = windows_shell_profiles(&home).await;
-        let targets = if detected.is_empty() {
+        if detected.is_empty() {
             vec![
                 documents.join("WindowsPowerShell/Microsoft.PowerShell_profile.ps1"),
                 documents.join("PowerShell/Microsoft.PowerShell_profile.ps1"),
             ]
         } else {
             detected
-        };
+        }
+    };
+
+    let _guard = crate::config_file::CONFIG_LOCK
+        .lock()
+        .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    {
+        let hook = format!("\n# EnvHub Mise activation\n$MiseBin = '{}'\n$MiseShell = if ($PSVersionTable.PSEdition -eq 'Core') {{ 'pwsh' }} else {{ 'powershell' }}\n(& $MiseBin activate $MiseShell) | Out-String | Invoke-Expression\n", bin.to_string_lossy().replace('\'', "''"));
         // Only the host-specific profiles are written: `profile.ps1` would run in
         // addition to them and double-activate mise.
         for path in targets {

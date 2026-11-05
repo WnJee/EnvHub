@@ -68,3 +68,56 @@ jobs:
       - name: cargo clippy
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
+
+  # `#[cfg(target_os = "windows")]` code is never compiled by the macOS/Linux
+  # legs, so a broken Windows-only path only surfaces in the 7-minute release
+  # build — v0.2.21 shipped a non-Send future in `auto_fix_health_check`
+  # (system.rs) that only Windows CI caught. Type-checking the Windows target
+  # from a Linux runner is cheap and needs no linker.
+  windows-typecheck:
+    name: Windows typecheck (cross, no link)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          key: windows-typecheck
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm run build
+
+      # `tauri-build` compiles a Windows resource file through tauri-winres,
+      # which shells out to `llvm-rc`. `cargo check` never links, so a stub that
+      # just creates the .res file is enough to get the crate type-checked.
+      - name: Stub llvm-rc
+        run: |
+          mkdir -p "$RUNNER_TEMP/rcshim"
+          cat > "$RUNNER_TEMP/rcshim/llvm-rc" <<'SH'
+          #!/bin/sh
+          out=""; prev=""
+          for a in "$@"; do
+            case "$prev" in /fo|/FO) out="$a" ;; esac
+            prev="$a"
+          done
+          [ -n "$out" ] && : > "$out"
+          exit 0
+          SH
+          chmod +x "$RUNNER_TEMP/rcshim/llvm-rc"
+          echo "$RUNNER_TEMP/rcshim" >> "$GITHUB_PATH"
+
+      - name: cargo check (windows target)
+        working-directory: src-tauri
+        run: cargo check --target x86_64-pc-windows-msvc --all-targets
