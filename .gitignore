@@ -37,7 +37,6 @@ src-tauri/target/
 src-tauri/gen/
 target/
 **/*.rs.bk
-Cargo.lock
 
 # Environment variables
 .env
