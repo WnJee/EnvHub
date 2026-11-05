@@ -15,7 +15,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider, useToast } from './components/Toast';
 import { appendLogs } from './utils/logBuffer';
 import { api, isTauri } from './services/tauri';
-import { checkForUpdates, UpdateInfo, CURRENT_APP_VERSION, resolveAppVersion } from './services/updater';
+import { checkForUpdates, UpdateInfo, resolveAppVersion } from './services/updater';
 import { setBackendPlatform } from './utils/platform';
 import { 
   RuntimeTool, 
@@ -93,17 +93,6 @@ const MainDashboard: React.FC = () => {
   const refreshAgain = useRef(false);
   const pendingLogs = useRef<string[]>([]);
   const installBusy = useRef(false);
-  // Authoritative version from the Tauri bundle (falls back to the constant).
-  const [appVersion, setAppVersion] = useState<string>(CURRENT_APP_VERSION);
-  useEffect(() => {
-    let cancelled = false;
-    resolveAppVersion().then((v) => {
-      if (!cancelled) setAppVersion(v);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const appendInstallLog = (line: string) => {
     pendingLogs.current = appendLogs(pendingLogs.current, [line]);
@@ -159,7 +148,13 @@ const MainDashboard: React.FC = () => {
   const handleCheckUpdate = async (manual: boolean) => {
     setIsCheckingUpdate(true);
     try {
-      const info = await checkForUpdates(appVersion);
+      // Resolve the version at call time, never from component state: the
+      // startup auto-check runs from a mount-time effect whose closure would
+      // still hold the pre-resolve placeholder (`CURRENT_APP_VERSION`). Reading
+      // state here made the app report the *previous* version forever and
+      // re-offer an update that had already been installed successfully.
+      const current = await resolveAppVersion();
+      const info = await checkForUpdates(current);
       if (info.hasUpdate) {
         setUpdateState({
           isOpen: true,
@@ -167,7 +162,7 @@ const MainDashboard: React.FC = () => {
         });
         toast.info(`发现新版本 EnvHub v${info.latestVersion}！`, '软件更新');
       } else if (manual) {
-        toast.success(`当前已是最新版本 (v${appVersion})`, '版本检查');
+        toast.success(`当前已是最新版本 (v${current})`, '版本检查');
       }
     } catch (err) {
       if (manual) {

@@ -9,6 +9,7 @@ import {
   Cpu
 } from 'lucide-react';
 import { isMac } from '../utils/platform';
+import { CURRENT_APP_VERSION } from '../services/updater';
 
 export type TabType = 'runtimes' | 'projects' | 'system-tools' | 'mirrors' | 'env-health' | 'settings';
 
@@ -94,7 +95,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="font-bold tracking-tight text-white flex items-center gap-1.5 text-sm">
               EnvHub
               <span className="text-[9px] uppercase font-mono px-1.5 py-0.2 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30 font-semibold">
-                v0.2.20
+                v{CURRENT_APP_VERSION}
               </span>
             </div>
             <p className="text-[10px] text-slate-400 font-medium">开发环境与版本管理</p>

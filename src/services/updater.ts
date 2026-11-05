@@ -14,9 +14,13 @@ export interface UpdateInfo {
 
 /**
  * Fallback shown before `getVersion()` resolves (and in browser preview).
- * The authoritative value comes from `tauri.conf.json` via `resolveAppVersion()`.
+ * The authoritative value comes from the bundle via `resolveAppVersion()`.
+ * Injected from `package.json` at build time (`vite.config.ts` → `define:
+ * __APP_VERSION__`), because a hand-edited literal here used to stay at 0.2.20
+ * while the app already shipped 0.2.22 — which made the update dialog report a
+ * bogus "0.2.20 → 0.2.22" upgrade on every single launch.
  */
-export const CURRENT_APP_VERSION = '0.2.20';
+export const CURRENT_APP_VERSION = __APP_VERSION__;
 
 let resolvedAppVersion: string | null = null;
 

@@ -225,7 +225,9 @@ jobs:
     needs: release
     if: needs.release.outputs.released == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Downloads every platform asset to hash it, so it needs more than the
+    # old notes-only budget.
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
@@ -244,6 +246,33 @@ jobs:
             "$RUNNER_TEMP/notes.md"
           echo '----- generated notes -----'
           cat "$RUNNER_TEMP/notes.md"
+
+      # The in-app updater refuses to install any asset that is not listed in the
+      # release's `SHA256SUMS.txt` (`fetch_release_manifest` in
+      # src-tauri/src/commands/updater.rs aborts with
+      # "无法获取该版本的校验清单 SHA256SUMS.txt"). Nothing in this pipeline ever
+      # produced that file, so v0.2.21/v0.2.22 shipped without it and every
+      # in-app update from those builds fails before downloading. It must be
+      # generated here — in the single job that runs after all three platform
+      # legs — because a per-platform step would upload one manifest per leg and
+      # clobber the others, leaving only that leg's installer verifiable.
+      - name: Generate and upload SHA256SUMS.txt
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/assets"
+          gh release download "$TAG" --dir "$RUNNER_TEMP/assets" --clobber
+          # Never checksum the manifest itself (a re-run may have left one behind).
+          rm -f "$RUNNER_TEMP/assets/SHA256SUMS.txt"
+          # `sha256sum` prints `<digest>  <name>`, the exact format the updater's
+          # `expected_digest` parser reads.
+          ( cd "$RUNNER_TEMP/assets" && sha256sum -- * > "$RUNNER_TEMP/SHA256SUMS.txt" )
+          echo '----- SHA256SUMS.txt -----'
+          cat "$RUNNER_TEMP/SHA256SUMS.txt"
+          gh release upload "$TAG" "$RUNNER_TEMP/SHA256SUMS.txt" --clobber
 
       - name: Publish release with generated notes
         shell: bash
