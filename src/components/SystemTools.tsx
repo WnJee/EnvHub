@@ -79,7 +79,7 @@ export const SystemTools: React.FC<SystemToolsProps> = ({
         <div className="p-10 rounded-2xl bg-slate-900/40 border border-dashed border-slate-800 text-center space-y-2">
           <AlertCircle className="w-8 h-8 text-slate-500 mx-auto" />
           <h3 className="text-sm font-semibold text-slate-300">未找到匹配的系统工具</h3>
-          <p className="text-xs text-slate-500">可尝试搜索其他关键词如 brew, scoop, docker, redis, mysql, nginx 等</p>
+          <p className="text-xs text-slate-500">可尝试搜索其他关键词如 brew, scoop, docker, redis, mysql, ffmpeg 等</p>
         </div>
       ) : (
         /* System Tools Grid */

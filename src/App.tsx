@@ -15,7 +15,8 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastProvider, useToast } from './components/Toast';
 import { appendLogs } from './utils/logBuffer';
 import { api, isTauri } from './services/tauri';
-import { checkForUpdates, UpdateInfo, CURRENT_APP_VERSION } from './services/updater';
+import { checkForUpdates, UpdateInfo, CURRENT_APP_VERSION, resolveAppVersion } from './services/updater';
+import { setBackendPlatform } from './utils/platform';
 import { 
   RuntimeTool, 
   ProjectEnv, 
@@ -92,6 +93,18 @@ const MainDashboard: React.FC = () => {
   const refreshAgain = useRef(false);
   const pendingLogs = useRef<string[]>([]);
   const installBusy = useRef(false);
+  // Authoritative version from the Tauri bundle (falls back to the constant).
+  const [appVersion, setAppVersion] = useState<string>(CURRENT_APP_VERSION);
+  useEffect(() => {
+    let cancelled = false;
+    resolveAppVersion().then((v) => {
+      if (!cancelled) setAppVersion(v);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const appendInstallLog = (line: string) => {
     pendingLogs.current = appendLogs(pendingLogs.current, [line]);
   };
@@ -100,10 +113,17 @@ const MainDashboard: React.FC = () => {
     pendingLogs.current = [];
     if (batch.length) setInstallModalState(prev => ({ ...prev, logs: appendLogs(prev.logs, batch) }));
   };
+  // Only poll while an install is streaming: an always-on 100ms timer wakes
+  // React (and the whole tree) 10x per second for nothing.
+  const installRunning = installModalState.status === 'running';
   useEffect(() => {
+    if (!installRunning) {
+      flushInstallLogs();
+      return;
+    }
     const timer = setInterval(flushInstallLogs, 100);
     return () => clearInterval(timer);
-  }, []);
+  }, [installRunning]);
 
   const loadAllData = (isManual = false, afterMutation = false): Promise<void> => {
     if (refreshFlight.current) {
@@ -112,7 +132,11 @@ const MainDashboard: React.FC = () => {
     }
     setIsRefreshing(true);
     const flight = Promise.allSettled([
-      api.getSystemStatus().then(setSystemStatus),
+      api.getSystemStatus().then((status) => {
+        // The backend knows the real OS; prefer it over the user-agent guess.
+        setBackendPlatform(status.os);
+        setSystemStatus(status);
+      }),
       api.getRuntimes().then(setRuntimes),
       api.getProjects().then(setProjects),
       api.getSystemTools().then(setSystemTools),
@@ -135,7 +159,7 @@ const MainDashboard: React.FC = () => {
   const handleCheckUpdate = async (manual: boolean) => {
     setIsCheckingUpdate(true);
     try {
-      const info = await checkForUpdates(CURRENT_APP_VERSION);
+      const info = await checkForUpdates(appVersion);
       if (info.hasUpdate) {
         setUpdateState({
           isOpen: true,
@@ -143,7 +167,7 @@ const MainDashboard: React.FC = () => {
         });
         toast.info(`发现新版本 EnvHub v${info.latestVersion}！`, '软件更新');
       } else if (manual) {
-        toast.success(`当前已是最新版本 (v${CURRENT_APP_VERSION})`, '版本检查');
+        toast.success(`当前已是最新版本 (v${appVersion})`, '版本检查');
       }
     } catch (err) {
       if (manual) {
@@ -238,7 +262,6 @@ const MainDashboard: React.FC = () => {
         }));
       }
     ).then((success) => {
-      installBusy.current = false;
       flushInstallLogs();
       setInstallModalState((prev) => ({
         ...prev,
@@ -251,6 +274,14 @@ const MainDashboard: React.FC = () => {
       } else {
         toast.error(`安装 ${toolId} v${version} 失败，请查看日志详情`);
       }
+    }).catch((err) => {
+      flushInstallLogs();
+      setInstallModalState((prev) => ({ ...prev, status: 'failed' }));
+      toast.error(`安装 ${toolId} v${version} 失败: ${err}`);
+    }).finally(() => {
+      // Always release the guard: a throw inside `then` must not leave
+      // `installBusy` stuck true and silently swallow every later click.
+      installBusy.current = false;
     });
   };
 
@@ -335,7 +366,6 @@ const MainDashboard: React.FC = () => {
           }));
         }
       ).then((success) => {
-        installBusy.current = false;
         flushInstallLogs();
         setInstallModalState((prev) => ({
           ...prev,
@@ -348,6 +378,8 @@ const MainDashboard: React.FC = () => {
         } else {
           toast.error(`安装 ${toolId} 失败，请查看日志详情`);
         }
+      }).finally(() => {
+        installBusy.current = false;
       });
     } catch (err) {
       toast.error(`安装失败: ${err}`);
@@ -432,7 +464,6 @@ const MainDashboard: React.FC = () => {
           }));
         }
       ).then((success) => {
-        installBusy.current = false;
         flushInstallLogs();
         setInstallModalState((prev) => ({
           ...prev,
@@ -445,6 +476,8 @@ const MainDashboard: React.FC = () => {
         } else {
           toast.error('Mise CLI 引擎部署失败，请查看日志详情');
         }
+      }).finally(() => {
+        installBusy.current = false;
       });
     } catch (err) {
       toast.error(`安装失败: ${err}`);
@@ -592,7 +625,7 @@ const MainDashboard: React.FC = () => {
           setInstallModalState((prev) => ({
             ...prev,
             status: 'failed',
-            logs: appendLogs(prev.logs, [stopped ? '[cancel] 已请求终止安装进程组' : '[cancel] 当前阶段没有可取消的进程']),
+            logs: appendLogs(prev.logs, ['[cancel] 已请求终止安装进程组']),
           }));
         }}
         onSetGlobal={() => {

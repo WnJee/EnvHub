@@ -20,9 +20,11 @@ import {
   generateWindowsPowerShellScript, 
   generateWindowsBatchScript, 
   generateMiseTomlConfig, 
+  unexportableTools,
   ExportToolItem 
 } from '../utils/scriptGenerator';
 import { api } from '../services/tauri';
+import { isWindows } from '../utils/platform';
 import { useToast } from './Toast';
 
 interface ExportModalProps {
@@ -39,9 +41,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   runtimes
 }) => {
   const toast = useToast();
-  const [activeTab, setActiveTab] = useState<PlatformTab>(() =>
-    typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('win') ? 'ps1' : 'sh'
-  );
+  const [activeTab, setActiveTab] = useState<PlatformTab>(() => (isWindows() ? 'ps1' : 'sh'));
   const [includeMirrors, setIncludeMirrors] = useState<boolean>(true);
   const [includeEnvHook, setIncludeEnvHook] = useState<boolean>(true);
   const [copied, setCopied] = useState<boolean>(false);
@@ -59,21 +59,23 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       }));
   });
 
-  // Keep toolItems synchronized when modal opens or runtimes change
+  // Keep toolItems synchronized when modal opens or runtimes change. A runtime
+  // refresh produces a new array reference every time, so preserve the user's
+  // manual checkbox choices by merging on id instead of resetting `checked`.
   React.useEffect(() => {
-    if (isOpen) {
-      setToolItems(
-        runtimes
-          .filter((r) => r.activeVersion || (r.installedVersions && r.installedVersions.length > 0))
-          .map((r) => ({
-            id: r.id,
-            name: r.name,
-            version: r.activeVersion || r.installedVersions[0] || 'latest',
-            checked: true
-          }))
-      );
-      setSavedPath(null);
-    }
+    if (!isOpen) return;
+    setToolItems((prev) => {
+      const previous = new Map(prev.map((item) => [item.id, item.checked]));
+      return runtimes
+        .filter((r) => r.activeVersion || (r.installedVersions && r.installedVersions.length > 0))
+        .map((r) => ({
+          id: r.id,
+          name: r.name,
+          version: r.activeVersion || r.installedVersions[0] || 'latest',
+          checked: previous.get(r.id) ?? true
+        }));
+    });
+    setSavedPath(null);
   }, [isOpen, runtimes]);
 
   const toggleTool = (toolId: string) => {
@@ -89,6 +91,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   };
 
   // Generate current script content based on activeTab
+  const skippedTools = useMemo(() => unexportableTools(toolItems), [toolItems]);
+
   const scriptContent = useMemo(() => {
     const opts = { includeMirrors, includeEnvHook };
     switch (activeTab) {
@@ -270,6 +274,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   ))
                 )}
               </div>
+              {skippedTools.length > 0 && (
+                <div className="mt-2 px-2 py-1.5 rounded-xl bg-amber-950/40 border border-amber-500/30 text-[10px] text-amber-300 leading-relaxed">
+                  已跳过 {skippedTools.length} 个无法安全写入脚本的工具：
+                  <span className="font-mono">
+                    {skippedTools.map((t) => `${t.id}@${t.version}`).join(', ')}
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Config Options */}

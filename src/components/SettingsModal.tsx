@@ -13,7 +13,7 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { useToast } from './Toast';
-import { CURRENT_APP_VERSION } from '../services/updater';
+import { CURRENT_APP_VERSION, resolveAppVersion } from '../services/updater';
 import { api } from '../services/tauri';
 
 interface SettingsModalProps {
@@ -33,6 +33,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isCheckingUpdate,
   onPathSaved,
 }) => {
+  // Read the version from the bundle instead of the hard-coded constant.
+  const [appVersion, setAppVersion] = React.useState<string>(CURRENT_APP_VERSION);
+  React.useEffect(() => {
+    let cancelled = false;
+    resolveAppVersion().then((v) => {
+      if (!cancelled) setAppVersion(v);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const [customPath, setCustomPath] = useState(systemStatus.misePath || '');
   const [autoCheckUpdate, setAutoCheckUpdate] = useState(() => {
     return localStorage.getItem('auto_check_update') !== 'false';
@@ -89,7 +101,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold text-white">EnvHub 当前版本</span>
               <span className="text-xs font-mono font-semibold px-2 py-0.2 rounded-full bg-blue-500/20 text-blue-400 border border-blue-500/30">
-                v{CURRENT_APP_VERSION}
+                v{appVersion}
               </span>
             </div>
             <p className="text-[11px] text-slate-400 mt-0.5">
@@ -243,7 +255,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           基于 Tauri v2 (Rust) + React 18 + Tailwind CSS + Mise CLI 驱动的现代化环境管理套件
         </p>
         <div className="text-[10px] font-mono text-slate-400">
-          Version {CURRENT_APP_VERSION} • 极速原生体验
+          Version {appVersion} • 极速原生体验
         </div>
       </div>
     </div>

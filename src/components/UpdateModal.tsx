@@ -19,6 +19,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { UpdateInfo } from '../services/updater';
+import { isWindows, isLinux } from '../utils/platform';
 import { api } from '../services/tauri';
 
 interface UpdateModalProps {
@@ -288,9 +289,8 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   };
 
   // Detect platform chip
-  const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent.toLowerCase() : '';
-  const isWindows = userAgent.includes('win');
-  const isLinux = userAgent.includes('linux');
+  const isWindowsPlatform = isWindows();
+  const isLinuxPlatform = isLinux();
 
   const getStepText = (p: number) => {
     if (p < 30) return '正在连接高速通道建立安全下载...';
@@ -371,11 +371,11 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
               </div>
 
               <div className="text-xs text-slate-400 flex items-center gap-2 mt-1 font-sans">
-                {isWindows ? (
+                {isWindowsPlatform ? (
                   <span className="flex items-center gap-1 text-slate-300">
                     <Monitor className="w-3 h-3 text-cyan-400" /> Windows x64
                   </span>
-                ) : isLinux ? (
+                ) : isLinuxPlatform ? (
                   <span className="flex items-center gap-1 text-slate-300">
                     <Terminal className="w-3 h-3 text-amber-400" /> Linux AppImage
                   </span>

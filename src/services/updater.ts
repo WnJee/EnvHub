@@ -1,4 +1,5 @@
 import { api, isTauri } from './tauri';
+import { isWindows, isLinux } from '../utils/platform';
 
 export interface UpdateInfo {
   hasUpdate: boolean;
@@ -11,7 +12,32 @@ export interface UpdateInfo {
   downloadUrl?: string;
 }
 
+/**
+ * Fallback shown before `getVersion()` resolves (and in browser preview).
+ * The authoritative value comes from `tauri.conf.json` via `resolveAppVersion()`.
+ */
 export const CURRENT_APP_VERSION = '0.2.20';
+
+let resolvedAppVersion: string | null = null;
+
+/**
+ * Read the real app version from the Tauri bundle instead of trusting the
+ * hard-coded constant (which drifts from `tauri.conf.json` / `Cargo.toml`).
+ */
+export async function resolveAppVersion(): Promise<string> {
+  if (resolvedAppVersion) return resolvedAppVersion;
+  if (isTauri()) {
+    try {
+      const { getVersion } = await import('@tauri-apps/api/app');
+      resolvedAppVersion = await getVersion();
+      return resolvedAppVersion;
+    } catch {
+      // Fall through to the compiled-in fallback.
+    }
+  }
+  resolvedAppVersion = CURRENT_APP_VERSION;
+  return resolvedAppVersion;
+}
 
 /**
  * Compare two semver strings (e.g. "0.1.1" vs "0.1.0")
@@ -54,15 +80,24 @@ function cleanHtmlToMarkdown(html: string): string {
     .trim();
 }
 
-function getPlatformDownloadUrl(latestVer: string): string {
-  const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent.toLowerCase() : '';
-  const isWindows = userAgent.includes('win');
-  const isLinux = userAgent.includes('linux');
+/**
+ * `AbortSignal.timeout()` only exists in WebKitGTK >= 2.40 / Safari 16+, so on
+ * older Linux distros all four update-check fallbacks threw a TypeError and the
+ * updater silently never worked. Fall back to a plain AbortController.
+ */
+function timeoutSignal(ms: number): AbortSignal {
+  const factory = (AbortSignal as unknown as { timeout?: (ms: number) => AbortSignal }).timeout;
+  if (typeof factory === 'function') return factory.call(AbortSignal, ms);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
 
-  if (isWindows) {
+function getPlatformDownloadUrl(latestVer: string): string {
+  if (isWindows()) {
     return `https://github.com/WnJee/EnvHub/releases/download/v${latestVer}/EnvHub_${latestVer}_x64-setup.exe`;
   }
-  if (isLinux) {
+  if (isLinux()) {
     return `https://github.com/WnJee/EnvHub/releases/download/v${latestVer}/EnvHub_${latestVer}_amd64.AppImage`;
   }
   return `https://github.com/WnJee/EnvHub/releases/download/v${latestVer}/EnvHub_${latestVer}_universal.dmg`;
@@ -99,7 +134,7 @@ export async function checkForUpdates(currentVersion: string = CURRENT_APP_VERSI
     try {
       const response = await fetch('https://api.github.com/repos/WnJee/EnvHub/releases/latest', {
         headers: { Accept: 'application/vnd.github.v3+json' },
-        cache: 'no-cache', signal: AbortSignal.timeout(10000),
+        cache: 'no-cache', signal: timeoutSignal(10000),
       });
       if (response.ok) {
         const data = await response.json();
@@ -111,14 +146,10 @@ export async function checkForUpdates(currentVersion: string = CURRENT_APP_VERSI
 
         // Check assets
         if (data.assets && Array.isArray(data.assets) && data.assets.length > 0) {
-          const userAgent = typeof navigator !== 'undefined' ? navigator.userAgent.toLowerCase() : '';
-          const isWindows = userAgent.includes('win');
-          const isLinux = userAgent.includes('linux');
-
-          if (isWindows) {
+          if (isWindows()) {
             const winAsset = data.assets.find((a: any) => a.name.endsWith('_x64-setup.exe'));
             if (winAsset) downloadUrl = winAsset.browser_download_url;
-          } else if (isLinux) {
+          } else if (isLinux()) {
             const linuxAsset = data.assets.find((a: any) => a.name.endsWith('_amd64.AppImage'));
             if (linuxAsset) downloadUrl = linuxAsset.browser_download_url;
           } else {
@@ -135,7 +166,7 @@ export async function checkForUpdates(currentVersion: string = CURRENT_APP_VERSI
   // Tier 3: Fallback to GitHub releases.atom (Zero rate limits, always works)
   if (!latestVer) {
     try {
-      const response = await fetch('https://github.com/WnJee/EnvHub/releases.atom', { cache: 'no-cache', signal: AbortSignal.timeout(10000) });
+      const response = await fetch('https://github.com/WnJee/EnvHub/releases.atom', { cache: 'no-cache', signal: timeoutSignal(10000) });
       if (response.ok) {
         const xml = await response.text();
         const entryMatch = xml.match(/<entry>([\s\S]*?)<\/entry>/);
@@ -169,7 +200,7 @@ export async function checkForUpdates(currentVersion: string = CURRENT_APP_VERSI
   // Tier 4: Fallback to GitHub latest release redirect URL
   if (!latestVer) {
     try {
-      const res = await fetch('https://github.com/WnJee/EnvHub/releases/latest', { method: 'HEAD', signal: AbortSignal.timeout(10000) });
+      const res = await fetch('https://github.com/WnJee/EnvHub/releases/latest', { method: 'HEAD', signal: timeoutSignal(10000) });
       if (res.url && res.url.includes('/releases/tag/')) {
         const tag = res.url.split('/releases/tag/')[1].split('/')[0];
         latestVer = tag.replace(/^v/, '');

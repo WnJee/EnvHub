@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { RuntimeTool } from '../types';
 import { 
   Check, 
@@ -93,6 +93,53 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
     return () => { stale = true; };
   }, [currentId, remoteRetry]);
 
+  // Filter and deduplicate remote versions to only highest patch per minor release
+  // Node's `ls-remote` returns 700+ versions; without memoisation every
+  // keystroke in the search box re-deduped and re-filtered the whole list.
+  //
+  // These hooks MUST stay above the `!currentTool` early return below: bailing
+  // out before them changes the hook count between renders and React throws
+  // "Rendered more hooks than during the previous render".
+  const currentToolId = currentTool?.id;
+  const installedVersions = currentTool?.installedVersions;
+  const availableVersions = currentTool?.availableVersions;
+
+  const curatedVersions = useMemo(
+    () =>
+      currentToolId
+        ? filterLatestMinorVersions(
+            [
+              ...(installedVersions ?? []),
+              ...(remoteVersions[currentToolId] || availableVersions || [])
+            ],
+            currentToolId
+          )
+        : [],
+    [installedVersions, availableVersions, remoteVersions, currentToolId]
+  );
+  const availableVersionsFiltered = useMemo(() => curatedVersions.filter((v) => {
+    if (remoteSearch && !v.toLowerCase().includes(remoteSearch.toLowerCase())) {
+      return false;
+    }
+    if (versionFilter === 'installed') {
+      return (installedVersions ?? []).includes(v);
+    }
+    if (versionFilter === 'lts') {
+      return (
+        v.startsWith('21.') ||
+        v.startsWith('17.') ||
+        v.startsWith('11.') ||
+        v.startsWith('8.') ||
+        v.startsWith('20.') ||
+        v.startsWith('22.') ||
+        v.startsWith('3.12') ||
+        v.startsWith('3.10') ||
+        v.includes('lts')
+      );
+    }
+    return true;
+  }), [curatedVersions, remoteSearch, versionFilter, installedVersions]);
+
   if (!currentTool) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 text-center text-slate-400 bg-[#090D16]">
@@ -155,30 +202,7 @@ export const RuntimeManager: React.FC<RuntimeManagerProps> = ({
   };
 
   // Filter and deduplicate remote versions to only highest patch per minor release
-  const curatedVersions = filterLatestMinorVersions([...currentTool.installedVersions, ...(remoteVersions[currentTool.id] || currentTool.availableVersions || [])], currentTool.id);
-  const availableVersionsFiltered = curatedVersions.filter((v) => {
-    if (remoteSearch && !v.toLowerCase().includes(remoteSearch.toLowerCase())) {
-      return false;
-    }
-    if (versionFilter === 'installed') {
-      return currentTool.installedVersions.includes(v);
-    }
-    if (versionFilter === 'lts') {
-      return (
-        v.startsWith('21.') ||
-        v.startsWith('17.') ||
-        v.startsWith('11.') ||
-        v.startsWith('8.') ||
-        v.startsWith('20.') ||
-        v.startsWith('22.') ||
-        v.startsWith('3.12') ||
-        v.startsWith('3.10') ||
-        v.includes('lts')
-      );
-    }
-    return true;
-  });
-
+  // (moved above the `!currentTool` guard — see the note there).
   return (
     <div className="flex-1 flex overflow-hidden bg-[#090D16]">
       {(remoteLoading || remoteError) && <div role="status" className="absolute bottom-2 right-4 z-10 max-w-md rounded bg-slate-900 px-3 py-2 text-xs text-slate-400">{remoteLoading ? '正在加载所选语言的远端版本…' : <><span>远端版本加载失败：{remoteError}</span><button type="button" onClick={() => setRemoteRetry(value => value + 1)} className="ml-2 text-blue-400 underline">重试</button></>}</div>}

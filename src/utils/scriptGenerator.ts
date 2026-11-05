@@ -10,13 +10,43 @@ export interface ExportScriptOptions {
   includeEnvHook: boolean;
 }
 
+// mise plugin ids look like `npm:prettier`, `ubi:owner/repo` or `core:python`.
+// They are safe to interpolate into a quoted string once quoting metacharacters
+// are excluded, so allow `:`, `/` and `-` in addition to the plain runtime ids.
+const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._+:/\-]*$/;
+const SAFE_VERSION = /^[a-zA-Z0-9][a-zA-Z0-9._+\-]*$/;
+
+/**
+ * Whether a runtime can be rendered into a generated script without escaping.
+ *
+ * `ExportModal` calls the generators from a `useMemo`, i.e. during render, so
+ * the generators must never throw — a single exotic mise plugin id would
+ * otherwise take the whole app down through the ErrorBoundary.
+ */
+export function isExportable(tool: ExportToolItem): boolean {
+  const ok = (value: string, pattern: RegExp) =>
+    pattern.test(value) && !value.includes('..');
+  return ok(tool.id, SAFE_ID) && ok(tool.version, SAFE_VERSION);
+}
+
+/** Tools that would be silently dropped from an export, for the UI to warn about. */
+export function unexportableTools(tools: ExportToolItem[]): ExportToolItem[] {
+  return tools.filter(
+    (t) => t.checked && t.version && t.version !== 'system' && !isExportable(t)
+  );
+}
+
 function selectedTools(tools: ExportToolItem[]): ExportToolItem[] {
-  return tools.filter(t => t.checked && t.version && t.version !== 'system').map(t => {
-    if (![t.id, t.version].every(v => /^[a-zA-Z0-9][a-zA-Z0-9._+-]*$/.test(v) && !v.includes('..'))) {
-      throw new Error(`Invalid tool or version: ${t.id}`);
-    }
-    return { ...t, name: t.name.replace(/["$`\\\r\n]/g, '') };
-  });
+  return tools
+    .filter((t) => t.checked && t.version && t.version !== 'system')
+    .filter((t) => {
+      const ok = isExportable(t);
+      if (!ok) {
+        console.warn(`[EnvHub] 跳过无法安全导出的工具: ${t.id}@${t.version}`);
+      }
+      return ok;
+    })
+    .map((t) => ({ ...t, name: t.name.replace(/["$`\\\r\n]/g, '') }));
 }
 
 /**
@@ -501,7 +531,9 @@ export function generateMiseTomlConfig(tools: ExportToolItem[]): string {
   const selected = selectedTools(tools);
 
   const toolsToml = selected
-    .map((t) => `  ${t.id} = "${t.version}"`)
+    // Quote the key: an unquoted `a.b` would create a nested `[tools.a]` table
+    // instead of a key literally named `a.b`.
+    .map((t) => `  "${t.id}" = "${t.version}"`)
     .join('\n');
 
   return `# ==============================================================================

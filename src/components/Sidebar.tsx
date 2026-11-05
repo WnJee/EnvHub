@@ -8,6 +8,7 @@ import {
   Settings, 
   Cpu
 } from 'lucide-react';
+import { isMac } from '../utils/platform';
 
 export type TabType = 'runtimes' | 'projects' | 'system-tools' | 'mirrors' | 'env-health' | 'settings';
 
@@ -78,11 +79,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside className="w-60 bg-[#0B1120] border-r border-slate-800/80 flex flex-col justify-between shrink-0 select-none">
       {/* Brand Header with macOS Traffic Lights Clearance & Drag Region */}
       <div>
-        {/* Top Traffic Lights Drag Area */}
-        <div 
-          className="h-6 w-full shrink-0" 
-          data-tauri-drag-region
-        />
+        {/* Top Traffic Lights Drag Area — macOS overlay title bar only */}
+        {isMac() && <div className="h-6 w-full shrink-0" data-tauri-drag-region />}
         
         {/* Brand Bar */}
         <div 

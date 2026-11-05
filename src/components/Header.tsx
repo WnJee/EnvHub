@@ -1,5 +1,6 @@
 import React from 'react';
 import { Search, RefreshCw, CheckCircle2, AlertCircle, Apple, Monitor, Globe, Laptop, Share2 } from 'lucide-react';
+import { isMac } from '../utils/platform';
 import { SystemStatus } from '../types';
 import { TabType } from './Sidebar';
 import { isTauri } from '../services/tauri';
@@ -44,7 +45,9 @@ export const Header: React.FC<HeaderProps> = ({
 
   return (
     <header 
-      className="h-[4.75rem] pt-6 border-b border-slate-800/80 bg-[#0B1120]/95 backdrop-blur-md px-5 flex items-center justify-between shrink-0 select-none relative" 
+      // `titleBarStyle: "Overlay"` is macOS-only: Windows/Linux keep their native
+      // title bar, so reserving traffic-light space there just wastes 24px.
+      className={`${isMac() ? 'h-[4.75rem] pt-6' : 'h-16'} border-b border-slate-800/80 bg-[#0B1120]/95 backdrop-blur-md px-5 flex items-center justify-between shrink-0 select-none relative`} 
       data-tauri-drag-region
     >
       {/* Title & Subtitle with drag region */}

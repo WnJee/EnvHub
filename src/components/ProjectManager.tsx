@@ -12,7 +12,8 @@ import {
   ShieldAlert,
   Trash2
 } from 'lucide-react';
-import { api } from '../services/tauri';
+import { api, isTauri } from '../services/tauri';
+import { isWindows } from '../utils/platform';
 import { useToast } from './Toast';
 
 interface ProjectManagerProps {
@@ -42,10 +43,28 @@ export const ProjectManager: React.FC<ProjectManagerProps> = ({
     }
   };
 
+  // Native directory picker: typing an absolute path by hand was the only way
+  // to bind a project, and the placeholder was macOS-shaped.
+  const handleBrowseDirectory = async () => {
+    if (!isTauri()) {
+      toast.info('请在桌面端运行以使用系统目录选择器');
+      return;
+    }
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const picked = await open({ directory: true, multiple: false, title: '选择要绑定的项目目录' });
+      if (typeof picked === 'string' && picked) {
+        setNewProjectPath(picked);
+      }
+    } catch (err) {
+      toast.error(`打开目录选择器失败: ${err}`);
+    }
+  };
+
   const handleOpenVSCode = async (path: string) => {
     try {
       if (!await api.openInEditor(path)) throw new Error('编辑器启动失败');
-      toast.success(`已在 VS Code 中打开: ${path}`);
+      toast.success(`已在编辑器中打开: ${path}`);
     } catch (err) {
       toast.error(`打开编辑器失败: ${err}`);
     }
@@ -101,11 +120,17 @@ export const ProjectManager: React.FC<ProjectManagerProps> = ({
           <div className="flex gap-2">
             <input
               type="text"
-              placeholder="例如: /Users/username/workspace/my-app"
+              placeholder={isWindows() ? '例如: C:\\Users\\me\\workspace\\my-app' : '例如: /Users/username/workspace/my-app'}
               value={newProjectPath}
               onChange={(e) => setNewProjectPath(e.target.value)}
               className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-1.5 text-xs text-white placeholder-slate-400 focus:outline-none focus:border-blue-500 font-mono"
             />
+            <button
+              onClick={handleBrowseDirectory}
+              className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors shrink-0"
+            >
+              浏览...
+            </button>
             <button
               onClick={handleCreateProject}
               className="px-4 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition-colors"
