@@ -19,20 +19,15 @@ strip_noise() {
     -e 's/[[:space:]]+$//'
 }
 
-previous_tag=""
+# Notes end at the tag when it exists, at HEAD when previewing before tagging.
+end="HEAD"
 if git rev-parse --verify --quiet "${TAG}" >/dev/null; then
+  end="${TAG}"
   previous_tag=$(git describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null || true)
-elif git rev-parse --verify --quiet "HEAD" >/dev/null; then
+else
   previous_tag=$(git describe --tags --abbrev=0 --match 'v*' HEAD 2>/dev/null || true)
 fi
-
-if [ -n "$previous_tag" ] && git rev-parse --verify --quiet "${TAG}" >/dev/null; then
-  range="${previous_tag}..${TAG}"
-elif [ -n "$previous_tag" ]; then
-  range="${previous_tag}..HEAD"
-else
-  range="HEAD"
-fi
+range="${previous_tag:+${previous_tag}..}${end}"
 
 # section key -> heading, in display order.
 sections="feat fix perf refactor docs test chore other"

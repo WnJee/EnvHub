@@ -28,10 +28,17 @@ on:
 # Serialise releases per tag. Without this, two runs for the same tag both start
 # a 3-platform build and race to upload into the same release.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
+  # Tag pushes do not trigger the CI workflow, so the tagged commit is tested
+  # here. It runs alongside the builds and gates publishing, not building.
+  verify:
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+
   release:
     permissions:
       contents: write
@@ -61,8 +68,11 @@ jobs:
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 60
     steps:
+      # A manual re-release must build the tag, not the head of the default branch.
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Resolve tag
         id: tag
@@ -122,7 +132,7 @@ jobs:
           # `gh api` prints the 404 body to *stdout* and exits non-zero, so the
           # result must be branched on the exit code — `$(cmd || echo missing)`
           # would concatenate the JSON and "missing" into one bogus string.
-          if draft=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.draft' 2>/dev/null); then
+          if draft=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.draft' 2>"$RUNNER_TEMP/gh-error"); then
             case "$draft" in
               false)
                 if [ "$FORCE" != "true" ]; then
@@ -139,18 +149,23 @@ jobs:
                 exit 1
                 ;;
             esac
+          elif ! grep -q 'HTTP 404' "$RUNNER_TEMP/gh-error"; then
+            # Only "no such release" may proceed; an outage or rate limit must
+            # not be mistaken for an unpublished version.
+            echo "::error::Could not query the release for $TAG: $(cat "$RUNNER_TEMP/gh-error")"
+            exit 1
           fi
           echo "released=true" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust stable
         if: steps.guard.outputs.released == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Cache Rust build
         if: steps.guard.outputs.released == 'true'
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: './src-tauri -> target'
           key: ${{ matrix.platform }}
@@ -177,7 +192,7 @@ jobs:
 
       - name: Build Tauri Desktop Application
         if: steps.guard.outputs.released == 'true'
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -222,7 +237,7 @@ jobs:
   # also the publish step — if any platform leg fails, it never runs and the
   # release stays a draft.
   changelog:
-    needs: release
+    needs: [release, verify]
     if: needs.release.outputs.released == 'true'
     runs-on: ubuntu-latest
     # Downloads every platform asset to hash it, so it needs more than the
@@ -234,6 +249,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ needs.release.outputs.tag }}
           fetch-depth: 0
           fetch-tags: true
 
