@@ -1,0 +1,8 @@
+* text=auto eol=lf
+# Windows PowerShell 5.1 and cmd.exe need CRLF; the .ps1 files also carry a UTF-8 BOM.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.png binary
+*.ico binary
+*.icns binary

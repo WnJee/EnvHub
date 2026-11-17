@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 # EnvHub - 跨平台开发环境与多语言版本交互式向导 (Windows PowerShell)
 # 项目地址: https://github.com/WnJee/EnvHub
 # ==============================================================================
@@ -55,14 +55,24 @@ function Ensure-Mise {
     Write-EnvWarn "未在当前系统中检测到 Mise，开始自动安装..."
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    try {
-        Invoke-Expression (Invoke-RestMethod https://mise.jdx.dev/install.ps1)
-    } catch {
-        Write-EnvWarn "官方安装地址访问重试，尝试备用通道..."
-        Invoke-Expression (Invoke-RestMethod https://mise.run)
+    # Each channel is tried until mise is on PATH. https://mise.run is a POSIX
+    # shell script and cannot be used here.
+    $Installers = @(
+        @{ Name = 'mise.jdx.dev'; Run = { Invoke-Expression (Invoke-RestMethod https://mise.jdx.dev/install.ps1) } },
+        @{ Name = 'WinGet'; Run = { winget install --id jdx.mise -e --accept-source-agreements --accept-package-agreements } },
+        @{ Name = 'Scoop'; Run = { scoop install mise } }
+    )
+    foreach ($Installer in $Installers) {
+        if ($Installer.Name -ne 'mise.jdx.dev' -and -not (Get-Command $Installer.Name -ErrorAction SilentlyContinue)) { continue }
+        Write-EnvInfo "正在通过 $($Installer.Name) 安装 Mise..."
+        try { & $Installer.Run } catch { Write-EnvWarn "$($Installer.Name) 安装失败: $_" }
+        Update-SessionPath
+        if (Get-Command mise -ErrorAction SilentlyContinue) { break }
     }
-
-    Update-SessionPath
+    if (-not (Get-Command mise -ErrorAction SilentlyContinue)) {
+        Write-EnvErr "Mise 安装失败，请检查网络后重试，或手动执行: winget install jdx.mise"
+        exit 1
+    }
 
     # 注入 PowerShell Profile 环境变量与双内核兼容钩子
     $MiseHook = @'
@@ -132,12 +142,18 @@ function Ensure-PackageManager {
     $ans = Read-Host
     if ([string]::IsNullOrWhiteSpace($ans) -or $ans -match '^[Yy]$') {
         Write-EnvInfo "正在安装 Scoop..."
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
-        Invoke-RestMethod get.scoop.sh | Invoke-Expression
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        # Scoop's shims need RemoteSigned. The call reports an error when this
+        # process runs with -ExecutionPolicy Bypass, yet the user value is saved.
+        try { Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force -ErrorAction Stop } catch { }
+        try { Invoke-RestMethod https://get.scoop.sh | Invoke-Expression } catch { Write-EnvWarn "Scoop 安装脚本报错: $_" }
         Update-SessionPath
-        $global:PKG_MGR = "Scoop"
-        Write-EnvSucc "Scoop 安装完成！"
+        if (Get-Command scoop -ErrorAction SilentlyContinue) {
+            $global:PKG_MGR = "Scoop"
+            Write-EnvSucc "Scoop 安装完成！"
+        } else {
+            Write-EnvErr "Scoop 安装未完成，请根据上方输出排查后重试。"
+        }
     } else {
         Write-EnvInfo "已跳过 Scoop 安装。"
     }
