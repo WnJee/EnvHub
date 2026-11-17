@@ -5,6 +5,36 @@ export const isTauri = () => {
   return typeof window !== 'undefined' && ('__TAURI__' in window || '__TAURI_INTERNALS__' in window);
 };
 
+type InstallCommand = 'install_runtime_version' | 'install_system_tool' | 'bootstrap_mise_cli';
+
+// Run an install command while forwarding its `install-log` / `install-progress` events.
+async function streamInstall(
+  command: InstallCommand,
+  args: Record<string, string>,
+  onLog: (log: string) => void,
+  onProgress: (percent: number) => void
+): Promise<boolean> {
+  if (!isTauri()) {
+    onLog('[ERROR] 请在 EnvHub 桌面客户端中执行安装');
+    return false;
+  }
+  const unlisteners: Array<() => void> = [];
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const { listen } = await import('@tauri-apps/api/event');
+    unlisteners.push(
+      await listen<string>('install-log', (event) => onLog(event.payload)),
+      await listen<number>('install-progress', (event) => onProgress(event.payload))
+    );
+    return await invoke<boolean>(command, args);
+  } catch (err) {
+    onLog(`[ERROR] 安装异常: ${err}`);
+    return false;
+  } finally {
+    unlisteners.forEach((unlisten) => unlisten());
+  }
+}
+
 // Service API layer directly connected to Tauri Backend
 export const api = {
   async saveMisePath(path: string): Promise<string> {
@@ -83,36 +113,7 @@ export const api = {
     onLog: (log: string) => void,
     onProgress: (percent: number) => void
   ): Promise<boolean> {
-    if (isTauri()) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const { listen } = await import('@tauri-apps/api/event');
-
-        let unlistenLog: (() => void) | null = null;
-        let unlistenProgress: (() => void) | null = null;
-
-        try {
-          unlistenLog = await listen<string>('install-log', (event) => {
-            onLog(event.payload);
-          });
-          unlistenProgress = await listen<number>('install-progress', (event) => {
-            onProgress(event.payload);
-          });
-
-          return await invoke<boolean>('install_runtime_version', { toolId, version });
-        } finally {
-          if (unlistenLog) unlistenLog();
-          if (unlistenProgress) unlistenProgress();
-        }
-      } catch (err) {
-        onLog(`[ERROR] 安装异常: ${err}`);
-        return false;
-      }
-    }
-
-    onLog('[ERROR] 当前处于浏览器非原生环境，请在 Tauri 桌面客户端中执行真实安装！');
-    onProgress(0);
-    return false;
+    return streamInstall('install_runtime_version', { toolId, version }, onLog, onProgress);
   },
 
   async cancelCurrentInstall(): Promise<boolean> {
@@ -212,38 +213,7 @@ export const api = {
     onLog: (log: string) => void,
     onProgress: (percent: number) => void
   ): Promise<boolean> {
-    if (isTauri()) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const { listen } = await import('@tauri-apps/api/event');
-
-        let unlistenLog: (() => void) | null = null;
-        let unlistenProgress: (() => void) | null = null;
-
-        try {
-          unlistenLog = await listen<string>('install-log', (event) => {
-            onLog(event.payload);
-          });
-          unlistenProgress = await listen<number>('install-progress', (event) => {
-            onProgress(event.payload);
-          });
-
-          return await invoke<boolean>('install_system_tool', { toolId });
-        } finally {
-          if (unlistenLog) unlistenLog();
-          if (unlistenProgress) unlistenProgress();
-        }
-      } catch (err) {
-        onLog(`[ERROR] 安装异常: ${err}`);
-        return false;
-      }
-    }
-    onLog('[ERROR] 请在桌面客户端中运行以调用系统包管理器');
-    return false;
-  },
-
-  async installSystemTool(toolId: string): Promise<boolean> {
-    return this.startInstallSystemTool(toolId, () => {}, () => {});
+    return streamInstall('install_system_tool', { toolId }, onLog, onProgress);
   },
 
   // Mirrors
@@ -303,38 +273,7 @@ export const api = {
     onLog: (log: string) => void,
     onProgress: (percent: number) => void
   ): Promise<boolean> {
-    if (isTauri()) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const { listen } = await import('@tauri-apps/api/event');
-
-        let unlistenLog: (() => void) | null = null;
-        let unlistenProgress: (() => void) | null = null;
-
-        try {
-          unlistenLog = await listen<string>('install-log', (event) => {
-            onLog(event.payload);
-          });
-          unlistenProgress = await listen<number>('install-progress', (event) => {
-            onProgress(event.payload);
-          });
-
-          return await invoke<boolean>('bootstrap_mise_cli');
-        } finally {
-          if (unlistenLog) unlistenLog();
-          if (unlistenProgress) unlistenProgress();
-        }
-      } catch (err) {
-        onLog(`[ERROR] 安装异常: ${err}`);
-        return false;
-      }
-    }
-    onLog('[ERROR] 请在桌面客户端中运行');
-    return false;
-  },
-
-  async installMiseCli(): Promise<boolean> {
-    return this.startBootstrapMise(() => {}, () => {});
+    return streamInstall('bootstrap_mise_cli', {}, onLog, onProgress);
   },
 
   // Open URL in system default browser
@@ -356,15 +295,6 @@ export const api = {
     if (isTauri()) {
       const { invoke } = await import('@tauri-apps/api/core');
       return await invoke<boolean>('open_path_in_file_manager', { path });
-    }
-    return true;
-  },
-
-  // Open installer file
-  async openInstallerFile(path: string): Promise<boolean> {
-    if (isTauri()) {
-      const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<boolean>('open_installer_file', { path });
     }
     return true;
   },

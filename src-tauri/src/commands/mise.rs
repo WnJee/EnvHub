@@ -1,9 +1,7 @@
 use crate::env_helper;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::process::Stdio;
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RuntimeTool {
@@ -343,6 +341,7 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
     if let Some(cached) = RUNTIMES_CACHE.get("all") {
         return Ok(cached);
     }
+    let epoch = RUNTIMES_CACHE.epoch();
     let bin = env_helper::find_mise_binary();
     let mut tasks = tokio::task::JoinSet::new();
     let limit = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
@@ -417,7 +416,7 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
     }
     result.sort_by_key(|(index, _)| *index);
     let result: Vec<RuntimeTool> = result.into_iter().map(|(_, tool)| tool).collect();
-    RUNTIMES_CACHE.put("all", result.clone());
+    RUNTIMES_CACHE.put("all", result.clone(), epoch);
     Ok(result)
 }
 
@@ -703,67 +702,26 @@ pub async fn install_runtime_version(
 
     let mut cmd = runtime_network_command(&mise_bin.to_string_lossy(), &tool_id);
     cmd.current_dir(mise_working_dir())
-        .args(["install", &target, "--verbose"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("启动安装进程失败: {}", e))?;
-    let child_pid = child.id();
-    env_helper::set_active_install_pid(child_pid);
-
-    let mut readers = Vec::new();
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-
-    let app_clone = app.clone();
-    if let Some(stdout) = stdout {
-        let reader = BufReader::new(stdout);
-        let mut lines = reader.lines();
-        readers.push(tokio::spawn(async move {
-            let mut progress = 15;
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = app_clone.emit("install-log", line.clone());
-
-                let lower = line.to_lowercase();
-                if lower.contains("download") || lower.contains("get ") {
-                    progress = progress.max(35);
-                } else if lower.contains("200 ok") || lower.contains("downloaded") {
-                    progress = progress.max(65);
-                } else if lower.contains("verify") || lower.contains("checksum") {
-                    progress = progress.max(78);
-                } else if lower.contains("extract") || lower.contains("install") {
-                    progress = progress.max(88);
-                } else if lower.contains("installed") || lower.contains("complete") {
-                    progress = 98;
-                } else if progress < 90 {
-                    progress += 3;
-                }
-                let _ = app_clone.emit("install-progress", progress);
-            }
-        }));
-    }
-
-    let app_clone2 = app.clone();
-    if let Some(stderr) = stderr {
-        let reader = BufReader::new(stderr);
-        let mut lines = reader.lines();
-        readers.push(tokio::spawn(async move {
-            while let Ok(Some(line)) = lines.next_line().await {
-                let _ = app_clone2.emit("install-log", line.clone());
-            }
-        }));
-    }
-
-    let status = child
-        .wait()
-        .await
-        .map_err(|e| format!("等待安装完成失败: {}", e))?;
-    for reader in readers {
-        let _ = reader.await;
-    }
-    env_helper::clear_active_install_pid(child_pid);
+        .args(["install", &target, "--verbose"]);
+    let mut progress = 15;
+    let status = super::system::run_streamed(&app, cmd, move |line| {
+        let lower = line.to_lowercase();
+        if lower.contains("download") || lower.contains("get ") {
+            progress = progress.max(35);
+        } else if lower.contains("200 ok") || lower.contains("downloaded") {
+            progress = progress.max(65);
+        } else if lower.contains("verify") || lower.contains("checksum") {
+            progress = progress.max(78);
+        } else if lower.contains("extract") || lower.contains("install") {
+            progress = progress.max(88);
+        } else if lower.contains("installed") || lower.contains("complete") {
+            progress = 98;
+        } else if progress < 90 {
+            progress += 3;
+        }
+        Some(progress)
+    })
+    .await?;
     if status.success() {
         let _ = app.emit(
             "install-log",
@@ -898,34 +856,27 @@ pub async fn open_terminal_for_runtime(tool_id: String, version: String) -> Resu
             "Write-Host '=== EnvHub 环境检测: {} {} ===' -ForegroundColor Cyan; & '{}' exec '{}' -- {} {}; Write-Host ''; Write-Host '可关闭此终端窗口' -ForegroundColor DarkGray",
             tool_id, version, mise.to_string_lossy().replace('\'', "''"), target, exec, command_args
         );
-        std::process::Command::new("cmd.exe")
-            .args([
-                "/c",
-                "start",
-                "",
-                "powershell.exe",
-                "-NoExit",
-                "-NoProfile",
-                "-Command",
-                &script,
-            ])
+        // A console of its own, started directly: `cmd /c start` would re-parse
+        // the script and treat `&` in the Mise path as a command separator.
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        std::process::Command::new("powershell.exe")
+            .creation_flags(CREATE_NEW_CONSOLE)
+            .args(["-NoExit", "-NoProfile", "-Command", &script])
             .spawn()
             .map_err(|e| format!("打开终端失败: {}", e))?;
     }
 
     #[cfg(target_os = "linux")]
     {
-        let command = format!(
-            "{} exec '{}' -- {} {}; exec $SHELL",
+        let script = format!(
+            "{} exec '{}' -- {} {}; exec \"${{SHELL:-sh}}\"",
             env_helper::shell_quote(&mise.to_string_lossy()),
             target,
             exec,
             command_args
         );
-        std::process::Command::new("x-terminal-emulator")
-            .args(["-e", "sh", "-lc", &command])
-            .spawn()
-            .map_err(|e| format!("打开终端失败: {}", e))?;
+        env_helper::open_linux_terminal(&mise_working_dir(), &script)?;
     }
 
     Ok(format!("已在终端执行 {} {}", exec, command_args))

@@ -5,7 +5,6 @@ use std::env;
 use std::fs;
 use std::process::Stdio;
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SystemStatus {
@@ -178,6 +177,7 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
     if let Some(cached) = SYSTEM_TOOLS_CACHE.get("all") {
         return Ok(cached);
     }
+    let epoch = SYSTEM_TOOLS_CACHE.epoch();
     let mut tools = Vec::new();
 
     #[cfg(not(target_os = "windows"))]
@@ -553,7 +553,7 @@ pub async fn get_system_tools() -> Result<Vec<SystemTool>, String> {
         }
     }
 
-    SYSTEM_TOOLS_CACHE.put("all", tools.clone());
+    SYSTEM_TOOLS_CACHE.put("all", tools.clone(), epoch);
     Ok(tools)
 }
 
@@ -845,9 +845,14 @@ async fn probe_tool_version(tool_id: &str) -> Option<String> {
         {
             if out.status.success() {
                 let raw = String::from_utf8_lossy(&out.stdout);
-                for word in raw.split(|c: char| c.is_whitespace() || c == '/' || c == '(' || c == ')' || c == ',') {
+                for word in raw.split(|c: char| {
+                    c.is_whitespace() || c == '/' || c == '(' || c == ')' || c == ','
+                }) {
                     let candidate = word.trim_start_matches(|c: char| !c.is_ascii_digit());
-                    let clean: String = candidate.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                    let clean: String = candidate
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit() || *c == '.')
+                        .collect();
                     if clean.contains('.') {
                         return Some(clean.trim_end_matches('.').to_string());
                     }
@@ -865,7 +870,10 @@ async fn probe_tool_version(tool_id: &str) -> Option<String> {
                 let raw = String::from_utf8_lossy(&out.stdout);
                 for word in raw.split_whitespace() {
                     let candidate = word.trim_start_matches(|c: char| !c.is_ascii_digit());
-                    let clean: String = candidate.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                    let clean: String = candidate
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit() || *c == '.')
+                        .collect();
                     if clean.contains('.') {
                         return Some(clean.trim_end_matches('.').to_string());
                     }
@@ -883,7 +891,10 @@ async fn probe_tool_version(tool_id: &str) -> Option<String> {
                 let raw = String::from_utf8_lossy(&out.stdout);
                 for word in raw.split_whitespace() {
                     let candidate = word.trim_start_matches(|c: char| !c.is_ascii_digit());
-                    let clean: String = candidate.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                    let clean: String = candidate
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit() || *c == '.')
+                        .collect();
                     if clean.contains('.') {
                         return Some(clean.trim_end_matches('.').to_string());
                     }
@@ -988,11 +999,23 @@ pub async fn test_system_tool(tool_id: String) -> Result<String, String> {
     } else if tool_id == "redis" {
         "redis-server"
     } else if tool_id == "aria2" {
-        if env_helper::command_available("aria2c") { "aria2c" } else { "aria2" }
+        if env_helper::command_available("aria2c") {
+            "aria2c"
+        } else {
+            "aria2"
+        }
     } else if tool_id == "imagemagick" {
-        if env_helper::command_available("magick") { "magick" } else { "convert" }
+        if env_helper::command_available("magick") {
+            "magick"
+        } else {
+            "convert"
+        }
     } else if tool_id == "ast-grep" {
-        if env_helper::command_available("ast-grep") { "ast-grep" } else { "sg" }
+        if env_helper::command_available("ast-grep") {
+            "ast-grep"
+        } else {
+            "sg"
+        }
     } else {
         &tool_id
     };
@@ -1041,123 +1064,48 @@ pub async fn test_system_tool(tool_id: String) -> Result<String, String> {
     }
 }
 
+/// Opens Terminal on the Homebrew stage of the interactive wizard. The wizard
+/// script is the single implementation; `--homebrew` selects that stage.
 #[cfg(target_os = "macos")]
 pub fn launch_homebrew_terminal_installer() -> Result<bool, String> {
-    let script_content = r#"#!/bin/bash
-clear
-echo "========================================================"
-echo "  ⚡ EnvHub - macOS Homebrew 自动化安装与加速向导"
-echo "========================================================"
-echo ""
-
-# 1. 检查是否已经安装过 Homebrew
-if [ -x "/opt/homebrew/bin/brew" ] || [ -x "/usr/local/bin/brew" ] || command -v brew &>/dev/null; then
-    echo "✓ 检测到系统已存在 Homebrew，正在为您配置环境变量..."
-    if [ -x "/opt/homebrew/bin/brew" ]; then
-        eval "$(/opt/homebrew/bin/brew shellenv)"
-        if [ -f "$HOME/.zprofile" ] && ! grep -q "/opt/homebrew/bin/brew shellenv" "$HOME/.zprofile" 2>/dev/null; then
-            echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zprofile"
-        fi
-        if [ -f "$HOME/.zshrc" ] && ! grep -q "/opt/homebrew/bin/brew shellenv" "$HOME/.zshrc" 2>/dev/null; then
-            echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zshrc"
-        fi
-    elif [ -x "/usr/local/bin/brew" ]; then
-        eval "$(/usr/local/bin/brew shellenv)"
-        if [ -f "$HOME/.zprofile" ] && ! grep -q "/usr/local/bin/brew shellenv" "$HOME/.zprofile" 2>/dev/null; then
-            echo 'eval "$(/usr/local/bin/brew shellenv)"' >> "$HOME/.zprofile"
-        fi
-        if [ -f "$HOME/.zshrc" ] && ! grep -q "/usr/local/bin/brew shellenv" "$HOME/.zshrc" 2>/dev/null; then
-            echo 'eval "$(/usr/local/bin/brew shellenv)"' >> "$HOME/.zshrc"
-        fi
-    fi
-    echo "✓ Homebrew 当前版本: $(brew --version 2>/dev/null | head -n 1 || echo '就绪')"
-    echo ""
-    echo "========================================================"
-    echo "🎉 Homebrew 环境变量已配置就绪，请返回 EnvHub 刷新即可！"
-    echo "========================================================"
-    echo ""
-    read -p "按回车键退出当前窗口..."
-    exit 0
-fi
-
-echo "正在检测网络连接状况与镜像源可用性..."
-USE_MIRROR=0
-if ! curl -Is --connect-timeout 4 https://raw.githubusercontent.com >/dev/null 2>&1; then
-    echo "⚡ 官方 GitHub 访问超时，将自动启用国内极速镜像源（中科大/清华/Gitee加速）"
-    USE_MIRROR=1
-else
-    echo "✓ GitHub 官方源网络连接正常"
-fi
-
-echo ""
-echo "--------------------------------------------------------"
-echo "提示: Homebrew 安装需要管理员权限，若出现密码提示请输入开机密码并按回车（输入时屏幕不显示密码属于正常现象）"
-echo "--------------------------------------------------------"
-echo ""
-
-if [ "$USE_MIRROR" -eq 1 ]; then
-    echo ">> 正在拉取国内一键安装脚本..."
-    /bin/zsh -c "$(curl -fsSL https://gitee.com/cunkai/HomebrewCN/raw/master/Homebrew.sh)"
-else
-    echo ">> 正在启动 Homebrew 官方安装程序..."
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-fi
-
-# 安装后处理：配置环境变量
-if [ -x "/opt/homebrew/bin/brew" ]; then
-    eval "$(/opt/homebrew/bin/brew shellenv)"
-    if [ -f "$HOME/.zprofile" ] && ! grep -q "/opt/homebrew/bin/brew shellenv" "$HOME/.zprofile" 2>/dev/null; then
-        echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zprofile"
-    fi
-    if [ -f "$HOME/.zshrc" ] && ! grep -q "/opt/homebrew/bin/brew shellenv" "$HOME/.zshrc" 2>/dev/null; then
-        echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zshrc"
-    fi
-elif [ -x "/usr/local/bin/brew" ]; then
-    eval "$(/usr/local/bin/brew shellenv)"
-    if [ -f "$HOME/.zprofile" ] && ! grep -q "/usr/local/bin/brew shellenv" "$HOME/.zprofile" 2>/dev/null; then
-        echo 'eval "$(/usr/local/bin/brew shellenv)"' >> "$HOME/.zprofile"
-    fi
-    if [ -f "$HOME/.zshrc" ] && ! grep -q "/usr/local/bin/brew shellenv" "$HOME/.zshrc" 2>/dev/null; then
-        echo 'eval "$(/usr/local/bin/brew shellenv)"' >> "$HOME/.zshrc"
-    fi
-fi
-
-echo ""
-echo "========================================================"
-if [ -x "/opt/homebrew/bin/brew" ] || [ -x "/usr/local/bin/brew" ] || command -v brew &>/dev/null; then
-    echo "🎉 Homebrew 安装并配置成功！"
-    echo "当前版本: $(brew --version 2>/dev/null | head -n 1 || echo '就绪')"
-    echo "现在可以返回 EnvHub 体验一键安装工具与版本管理了。"
-else
-    echo "⚠️ 安装流程已结束。若尚未生效，请根据终端上方提示重试或手动运行安装。"
-fi
-echo "========================================================"
-echo ""
-read -p "按回车键退出当前窗口..."
-"#;
-
-    let temp_dir = std::env::temp_dir();
-    let script_path = temp_dir.join("envhub_install_homebrew.command");
+    use std::os::unix::fs::PermissionsExt;
+    let script_content = format!(
+        "#!/usr/bin/env bash\nset -- --homebrew\n{}",
+        include_str!("../../../scripts/setup_interactive.sh")
+    );
+    let script_path = std::env::temp_dir().join("envhub_install_homebrew.command");
     std::fs::write(&script_path, script_content).map_err(|e| format!("创建安装脚本失败: {}", e))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755));
-    }
-
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o700))
+        .map_err(|e| format!("创建安装脚本失败: {}", e))?;
     let status = std::process::Command::new("open")
-        .args(["-a", "Terminal", script_path.to_str().unwrap_or("")])
-        .status();
-
-    if status.is_err() || !status.as_ref().unwrap().success() {
-        let _ = std::process::Command::new("open")
-            .arg(&script_path)
-            .status()
-            .map_err(|e| format!("拉起终端安装向导失败: {}", e))?;
+        .args(["-a", "Terminal"])
+        .arg(&script_path)
+        .status()
+        .map_err(|e| format!("拉起终端安装向导失败: {}", e))?;
+    if !status.success() {
+        return Err("拉起终端安装向导失败".into());
     }
-
     Ok(true)
+}
+
+/// Scoop's installer plus the execution policy its `.ps1` shims need. The
+/// policy call reports an error when a narrower scope (our own
+/// `-ExecutionPolicy Bypass`) overrides it, although the CurrentUser value is
+/// saved, so it must not abort the script.
+#[cfg(target_os = "windows")]
+fn scoop_install_command() -> tokio::process::Command {
+    let mut command = env_helper::create_silent_tokio_command("powershell");
+    command.args([
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "$ErrorActionPreference='Stop'; \
+         [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; \
+         try { Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force } catch {}; \
+         irm https://get.scoop.sh | iex",
+    ]);
+    command
 }
 
 #[tauri::command]
@@ -1175,22 +1123,8 @@ pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool
     #[cfg(target_os = "windows")]
     {
         if tool_id == "scoop" {
-            let script = r#"
-                # TLS 1.2 is available in Windows PowerShell 5.1 and newer.
-                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;
-                Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force;
-                irm get.scoop.sh | iex
-            "#;
             let _ = app.emit("install-log", "正在执行 Scoop 安装脚本...".to_string());
-            let mut command = env_helper::create_silent_tokio_command("powershell");
-            command.args([
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                &format!("$ErrorActionPreference='Stop'; {script}"),
-            ]);
-            stream_install(&app, command).await?;
+            stream_install(&app, scoop_install_command()).await?;
             if !env_helper::command_available("scoop") {
                 return Err("Scoop installer completed but command is missing".into());
             }
@@ -1330,36 +1264,43 @@ pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool
     }
 }
 
-pub(crate) async fn stream_install(
+/// Run a child to completion, forwarding both pipes to the `install-log`
+/// event. `progress` maps a stdout line to an `install-progress` value.
+pub(crate) async fn run_streamed(
     app: &AppHandle,
     mut command: tokio::process::Command,
-) -> Result<bool, String> {
+    mut progress: impl FnMut(&str) -> Option<u32> + Send + 'static,
+) -> Result<std::process::ExitStatus, String> {
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("启动安装进程失败: {e}"))?;
     let pid = child.id();
     env_helper::set_active_install_pid(pid);
     let stdout = child.stdout.take().ok_or("Missing stdout")?;
     let stderr = child.stderr.take().ok_or("Missing stderr")?;
-    let app1 = app.clone();
-    let app2 = app.clone();
-    let out = tokio::spawn(async move {
-        let mut lines = BufReader::new(stdout).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let _ = app1.emit("install-log", line);
+    let (out_app, err_app) = (app.clone(), app.clone());
+    let out = tokio::spawn(env_helper::forward_lines(stdout, b'\n', move |line| {
+        let _ = out_app.emit("install-log", line);
+        if let Some(value) = progress(line) {
+            let _ = out_app.emit("install-progress", value);
         }
-    });
-    let err = tokio::spawn(async move {
-        let mut lines = BufReader::new(stderr).lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            let _ = app2.emit("install-log", line);
-        }
-    });
-    let status = child.wait().await.map_err(|e| e.to_string())?;
+    }));
+    let err = tokio::spawn(env_helper::forward_lines(stderr, b'\n', move |line| {
+        let _ = err_app.emit("install-log", line);
+    }));
+    let status = child.wait().await.map_err(|e| e.to_string());
     let _ = tokio::join!(out, err);
     env_helper::clear_active_install_pid(pid);
+    status
+}
+
+pub(crate) async fn stream_install(
+    app: &AppHandle,
+    command: tokio::process::Command,
+) -> Result<bool, String> {
+    let status = run_streamed(app, command, |_| None).await?;
     if !status.success() {
         return Err(format!("Installation failed or cancelled: {status}"));
     }
@@ -1582,20 +1523,7 @@ pub async fn get_health_checks() -> Result<Vec<EnvHealthCheck>, String> {
             id: "mise-activated".into(),
             title: "Shell 激活配置".into(),
             status: activation_status.into(),
-            message: activation_message.clone(),
-            shell: shell.clone(),
-            config_file: profile.clone(),
-            can_auto_fix: !ready && shell_supported,
-        },
-        EnvHealthCheck {
-            id: "path-priority".into(),
-            title: "终端版本切换配置".into(),
-            status: activation_status.into(),
-            message: if shell_supported {
-                "检查持久化的 Shell 激活配置，不把 GUI 进程 PATH 当作系统配置".to_string()
-            } else {
-                activation_message
-            },
+            message: activation_message,
             shell: shell.clone(),
             config_file: profile,
             can_auto_fix: !ready && shell_supported,
@@ -1624,17 +1552,7 @@ pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
         #[cfg(target_os = "windows")]
         {
             env_helper::checked_output(
-                env_helper::output_timeout(
-                    env_helper::create_silent_tokio_command("powershell").args([
-                        "-NoProfile",
-                        "-ExecutionPolicy",
-                        "Bypass",
-                        "-Command",
-                        "$ErrorActionPreference='Stop'; irm https://get.scoop.sh | iex",
-                    ]),
-                    180,
-                )
-                .await?,
+                env_helper::output_timeout(&mut scoop_install_command(), 180).await?,
             )?;
             return Ok(true);
         }
@@ -1645,7 +1563,7 @@ pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
             );
         }
     }
-    if !["mise-activated", "path-priority"].contains(&check_id.as_str()) {
+    if check_id != "mise-activated" {
         return Err("Unknown health check".into());
     }
     let home = dirs::home_dir().ok_or("Cannot locate home directory")?;
@@ -1679,12 +1597,20 @@ pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
         // Only the host-specific profiles are written: `profile.ps1` would run in
         // addition to them and double-activate mise.
         for path in targets {
-            if path.file_name().map(|n| n != "Microsoft.PowerShell_profile.ps1") == Some(true) {
+            if path
+                .file_name()
+                .map(|n| n != "Microsoft.PowerShell_profile.ps1")
+                == Some(true)
+            {
                 continue;
             }
             let old = crate::config_file::read(&path)?;
             if !old.contains(&hook) {
-                crate::config_file::write(&path, &(old + &hook))?;
+                // A new profile gets a BOM: Windows PowerShell 5.1 reads BOM-less
+                // files in the ANSI code page and would mangle a non-ASCII user
+                // directory in `$MiseBin`.
+                let prefix = if old.is_empty() { "\u{feff}" } else { "" };
+                crate::config_file::write(&path, &format!("{prefix}{old}{hook}"))?;
             }
         }
     }
@@ -1719,23 +1645,42 @@ pub async fn auto_fix_health_check(check_id: String) -> Result<bool, String> {
     Ok(true)
 }
 
+/// The only files the export dialog produces.
+const EXPORT_FILES: [&str; 4] = [
+    "setup_envhub.sh",
+    "setup_envhub.ps1",
+    "setup_envhub.bat",
+    ".mise.toml",
+];
+
+/// Windows script hosts need CRLF, and Windows PowerShell 5.1 decodes a
+/// BOM-less `.ps1` in the ANSI code page, which garbles every non-ASCII string.
+fn export_file_text(filename: &str, content: &str) -> String {
+    let windows_script = filename.ends_with(".ps1") || filename.ends_with(".bat");
+    if !windows_script {
+        return content.to_string();
+    }
+    let body = content
+        .trim_start_matches('\u{feff}')
+        .replace("\r\n", "\n")
+        .replace('\n', "\r\n");
+    if filename.ends_with(".ps1") {
+        format!("\u{feff}{body}")
+    } else {
+        body
+    }
+}
+
 #[tauri::command]
 pub async fn save_export_file(filename: String, content: String) -> Result<String, String> {
-    let download_dir = dirs::download_dir().unwrap_or_else(|| {
-        dirs::home_dir()
-            .map(|h| h.join("Downloads"))
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-    });
-
-    if std::path::Path::new(&filename)
-        .file_name()
-        .and_then(|v| v.to_str())
-        != Some(filename.as_str())
-    {
+    if !EXPORT_FILES.contains(&filename.as_str()) {
         return Err("Invalid filename".into());
     }
+    let download_dir = dirs::download_dir()
+        .or_else(|| dirs::home_dir().map(|home| home.join("Downloads")))
+        .ok_or("Cannot locate the Downloads directory")?;
     let target_file = download_dir.join(&filename);
-    crate::config_file::write(&target_file, &content)?;
+    crate::config_file::write(&target_file, &export_file_text(&filename, &content))?;
 
     #[cfg(unix)]
     {
@@ -1751,6 +1696,20 @@ pub async fn save_export_file(filename: String, content: String) -> Result<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exported_windows_scripts_use_crlf_and_ps1_gets_a_bom() {
+        assert_eq!(export_file_text("setup_envhub.sh", "a\nb\n"), "a\nb\n");
+        assert_eq!(
+            export_file_text("setup_envhub.bat", "a\r\nb\n"),
+            "a\r\nb\r\n"
+        );
+        assert_eq!(
+            export_file_text("setup_envhub.ps1", "中\nb\n"),
+            "\u{feff}中\r\nb\r\n"
+        );
+    }
+
     #[test]
     fn activation_is_read_only_and_detects_variable_hook() {
         assert!(has_activation(
@@ -1786,9 +1745,15 @@ mod tests {
 
     #[test]
     fn windows_package_table_maps_known_tools_and_falls_back_to_id() {
-        assert_eq!(windows_packages_for("ripgrep"), ("ripgrep", "BurntSushi.ripgrep.MSVC"));
+        assert_eq!(
+            windows_packages_for("ripgrep"),
+            ("ripgrep", "BurntSushi.ripgrep.MSVC")
+        );
         assert_eq!(windows_packages_for("git"), ("git", "Git.Git"));
-        assert_eq!(windows_packages_for("unknown-tool"), ("unknown-tool", "unknown-tool"));
+        assert_eq!(
+            windows_packages_for("unknown-tool"),
+            ("unknown-tool", "unknown-tool")
+        );
     }
 
     #[test]
@@ -1802,8 +1767,7 @@ mod tests {
             assert!(profiles[0].ends_with(".bashrc"));
         }
         assert!(shell_profiles(home.path(), "/usr/bin/zsh")[0].ends_with(".zshrc"));
-        assert!(shell_profiles(home.path(), "/usr/bin/fish")[0]
-            .ends_with("config.fish"));
+        assert!(shell_profiles(home.path(), "/usr/bin/fish")[0].ends_with("config.fish"));
         // Unsupported shells degrade to an empty list instead of an error.
         assert!(shell_profiles(home.path(), "/usr/bin/nu").is_empty());
     }

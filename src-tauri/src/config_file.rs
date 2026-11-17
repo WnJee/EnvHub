@@ -13,7 +13,8 @@ pub fn read(path: &Path) -> Result<String, String> {
     }
 }
 
-/// Stage on the same filesystem, preserve permissions and retain a recovery copy.
+/// Stage on the same filesystem, preserve permissions and retain one recovery
+/// copy per file (`.envhub-backup-<name>`, replaced on every write).
 pub fn write(path: &Path, content: &str) -> Result<(), String> {
     let path = if path.is_symlink() {
         path.canonicalize().map_err(|e| e.to_string())?
@@ -32,12 +33,9 @@ pub fn write(path: &Path, content: &str) -> Result<(), String> {
             .as_file()
             .set_permissions(metadata.permissions())
             .map_err(|e| e.to_string())?;
-        let backup = tempfile::Builder::new()
-            .prefix(".envhub-backup-")
-            .tempfile_in(parent)
-            .map_err(|e| e.to_string())?;
-        fs::copy(&path, backup.path()).map_err(|e| e.to_string())?;
-        backup.keep().map_err(|e| e.to_string())?;
+        let name = path.file_name().ok_or("Invalid configuration path")?;
+        let backup = parent.join(format!(".envhub-backup-{}", name.to_string_lossy()));
+        fs::copy(&path, backup).map_err(|e| e.to_string())?;
     }
     staged
         .write_all(content.as_bytes())
@@ -113,10 +111,11 @@ mod tests {
         fs::write(&path, "old").unwrap();
         write(&path, "new").unwrap();
         assert_eq!(read(&path).unwrap(), "new");
-        assert!(fs::read_dir(dir.path()).unwrap().flatten().any(|e| e
-            .file_name()
-            .to_string_lossy()
-            .starts_with(".envhub-backup-")
-            && read(&e.path()).unwrap() == "old"));
+        let backup = dir.path().join(".envhub-backup-config");
+        assert_eq!(read(&backup).unwrap(), "old");
+        // A second write replaces the recovery copy instead of adding another.
+        write(&path, "newer").unwrap();
+        assert_eq!(read(&backup).unwrap(), "new");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
     }
 }

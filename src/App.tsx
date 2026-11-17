@@ -93,6 +93,7 @@ const MainDashboard: React.FC = () => {
   const refreshAgain = useRef(false);
   const pendingLogs = useRef<string[]>([]);
   const installBusy = useRef(false);
+  const installCancelled = useRef(false);
 
   const appendInstallLog = (line: string) => {
     pendingLogs.current = appendLogs(pendingLogs.current, [line]);
@@ -153,8 +154,8 @@ const MainDashboard: React.FC = () => {
       // still hold the pre-resolve placeholder (`CURRENT_APP_VERSION`). Reading
       // state here made the app report the *previous* version forever and
       // re-offer an update that had already been installed successfully.
-      const current = await resolveAppVersion();
-      const info = await checkForUpdates(current);
+      const [current, status] = await Promise.all([resolveAppVersion(), api.getSystemStatus()]);
+      const info = await checkForUpdates(current, status.arch);
       if (info.hasUpdate) {
         setUpdateState({
           isOpen: true,
@@ -227,36 +228,32 @@ const MainDashboard: React.FC = () => {
     }
   };
 
-  // Start Real Install Handler
-  const handleOpenInstallModal = (toolId: string, version: string) => {
+  // One install runs at a time; every kind streams into the same modal.
+  const runInstall = async (
+    target: { toolId: string; version: string },
+    text: { start: string; done: string; failed: string },
+    start: (onLog: (line: string) => void, onProgress: (percent: number) => void) => Promise<boolean>
+  ) => {
     if (!isTauri()) {
-      toast.info('当前为浏览器预览模式，请在桌面端运行以执行下载安装');
+      toast.info('当前为浏览器预览模式，请在桌面端运行以执行安装');
       return;
     }
-
     if (installBusy.current) return;
     installBusy.current = true;
+    installCancelled.current = false;
     pendingLogs.current = [];
     setInstallModalState({
       isOpen: true,
-      toolId,
-      version,
-      logs: [`[init] 正在连接 Mise 引擎，准备下载部署 ${toolId}@${version}...`],
+      ...target,
+      logs: [`[init] ${text.start}`],
       progress: 10,
       status: 'running'
     });
 
-    api.startInstallRuntime(
-      toolId,
-      version,
-      appendInstallLog,
-      (progress) => {
-        setInstallModalState((prev) => ({
-          ...prev,
-          progress
-        }));
-      }
-    ).then((success) => {
+    try {
+      const success = await start(appendInstallLog, (progress) => {
+        setInstallModalState((prev) => ({ ...prev, progress }));
+      });
       flushInstallLogs();
       setInstallModalState((prev) => ({
         ...prev,
@@ -264,21 +261,29 @@ const MainDashboard: React.FC = () => {
         progress: success ? 100 : prev.progress
       }));
       if (success) {
-        toast.success(`成功安装 ${toolId} v${version}`);
-        loadAllData(false, true);
+        toast.success(text.done);
+        void loadAllData(false, true);
+      } else if (installCancelled.current) {
+        toast.info('已取消安装');
       } else {
-        toast.error(`安装 ${toolId} v${version} 失败，请查看日志详情`);
+        toast.error(`${text.failed}，请查看日志详情`);
       }
-    }).catch((err) => {
-      flushInstallLogs();
-      setInstallModalState((prev) => ({ ...prev, status: 'failed' }));
-      toast.error(`安装 ${toolId} v${version} 失败: ${err}`);
-    }).finally(() => {
-      // Always release the guard: a throw inside `then` must not leave
-      // `installBusy` stuck true and silently swallow every later click.
+    } finally {
+      // The guard stays held until the backend process has really exited.
       installBusy.current = false;
-    });
+    }
   };
+
+  const handleOpenInstallModal = (toolId: string, version: string) =>
+    runInstall(
+      { toolId, version },
+      {
+        start: `正在连接 Mise 引擎，准备下载部署 ${toolId}@${version}...`,
+        done: `成功安装 ${toolId} v${version}`,
+        failed: `安装 ${toolId} v${version} 失败`
+      },
+      (onLog, onProgress) => api.startInstallRuntime(toolId, version, onLog, onProgress)
+    );
 
   // Handlers for Projects
   const handleAddProject = async (path: string) => {
@@ -334,52 +339,16 @@ const MainDashboard: React.FC = () => {
   };
 
   // Handlers for System Tools
-  const handleInstallSystemTool = async (toolId: string) => {
-    try {
-      if (!isTauri()) {
-        toast.info('请在桌面端运行以调用系统包管理器');
-        return;
-      }
-      if (installBusy.current) return;
-      installBusy.current = true;
-      pendingLogs.current = [];
-      setInstallModalState({
-        isOpen: true,
-        toolId: toolId,
-        version: 'latest',
-        logs: [`[init] 正在启动系统包管理器部署 ${toolId}...`],
-        progress: 15,
-        status: 'running',
-      });
-      api.startInstallSystemTool(
-        toolId,
-        appendInstallLog,
-        (progress) => {
-          setInstallModalState((prev) => ({
-            ...prev,
-            progress,
-          }));
-        }
-      ).then((success) => {
-        flushInstallLogs();
-        setInstallModalState((prev) => ({
-          ...prev,
-          status: success ? 'completed' : 'failed',
-          progress: success ? 100 : prev.progress,
-        }));
-        if (success) {
-          toast.success(`成功安装系统工具: ${toolId}`);
-          loadAllData(false, true);
-        } else {
-          toast.error(`安装 ${toolId} 失败，请查看日志详情`);
-        }
-      }).finally(() => {
-        installBusy.current = false;
-      });
-    } catch (err) {
-      toast.error(`安装失败: ${err}`);
-    }
-  };
+  const handleInstallSystemTool = (toolId: string) =>
+    runInstall(
+      { toolId, version: 'latest' },
+      {
+        start: `正在启动系统包管理器部署 ${toolId}...`,
+        done: `成功安装系统工具: ${toolId}`,
+        failed: `安装 ${toolId} 失败`
+      },
+      (onLog, onProgress) => api.startInstallSystemTool(toolId, onLog, onProgress)
+    );
 
   // Handlers for Mirrors
   const handleSetMirror = async (tool: string, mirrorUrl: string) => {
@@ -435,47 +404,15 @@ const MainDashboard: React.FC = () => {
   const handleBootstrapMise = async () => {
     setIsBootstrappingMise(true);
     try {
-      if (!isTauri()) {
-        toast.info('当前处于浏览器预览模式，请在桌面端运行。');
-        return;
-      }
-      if (installBusy.current) return;
-      installBusy.current = true;
-      pendingLogs.current = [];
-      setInstallModalState({
-        isOpen: true,
-        toolId: 'mise',
-        version: 'cli',
-        logs: ['[init] 正在连接官方源部署 Mise CLI 引擎...'],
-        progress: 10,
-        status: 'running',
-      });
-      await api.startBootstrapMise(
-        appendInstallLog,
-        (progress) => {
-          setInstallModalState((prev) => ({
-            ...prev,
-            progress,
-          }));
-        }
-      ).then((success) => {
-        flushInstallLogs();
-        setInstallModalState((prev) => ({
-          ...prev,
-          status: success ? 'completed' : 'failed',
-          progress: success ? 100 : prev.progress,
-        }));
-        if (success) {
-          toast.success('Mise CLI 引擎已安装就绪！');
-          loadAllData(false, true);
-        } else {
-          toast.error('Mise CLI 引擎部署失败，请查看日志详情');
-        }
-      }).finally(() => {
-        installBusy.current = false;
-      });
-    } catch (err) {
-      toast.error(`安装失败: ${err}`);
+      await runInstall(
+        { toolId: 'mise', version: 'cli' },
+        {
+          start: '正在连接官方源部署 Mise CLI 引擎...',
+          done: 'Mise CLI 引擎已安装就绪！',
+          failed: 'Mise CLI 引擎部署失败'
+        },
+        api.startBootstrapMise
+      );
     } finally {
       setIsBootstrappingMise(false);
     }
@@ -617,11 +554,10 @@ const MainDashboard: React.FC = () => {
         onCancel={async () => {
           const stopped = await api.cancelCurrentInstall();
           if (!stopped) throw new Error('当前阶段不可取消，请等待操作完成');
-          setInstallModalState((prev) => ({
-            ...prev,
-            status: 'failed',
-            logs: appendLogs(prev.logs, ['[cancel] 已请求终止安装进程组']),
-          }));
+          // The install promise settles once the process group is gone; it
+          // reports the outcome and releases the guard.
+          installCancelled.current = true;
+          appendInstallLog('[cancel] 已请求终止安装进程组');
         }}
         onSetGlobal={() => {
           handleSetGlobalVersion(installModalState.toolId, installModalState.version);

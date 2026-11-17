@@ -57,7 +57,9 @@ fn normalize_project_path(raw: &str) -> PathBuf {
     } else {
         PathBuf::from(raw)
     };
-    expanded.canonicalize().unwrap_or(expanded)
+    // `dunce` avoids the `\\?\` verbatim form on Windows, which cmd shims and
+    // most editors cannot open.
+    dunce::canonicalize(&expanded).unwrap_or(expanded)
 }
 
 /// Helper to extract real tools from a directory
@@ -288,8 +290,14 @@ pub fn set_project_tool_version(
             .map_err(|e| e.to_string())?;
         let path = target_dir.join(".tool-versions");
         let content = crate::config_file::read(&path)?;
+        // Keep the file's own BOM and line endings.
+        let (bom, body) = match content.strip_prefix('\u{feff}') {
+            Some(body) => ("\u{feff}", body),
+            None => ("", content.as_str()),
+        };
+        let newline = if body.contains("\r\n") { "\r\n" } else { "\n" };
         let mut found = false;
-        let mut lines: Vec<String> = content
+        let mut lines: Vec<String> = body
             .lines()
             .map(|line| {
                 if line.split_whitespace().next() == Some(tool_id.as_str()) {
@@ -307,7 +315,7 @@ pub fn set_project_tool_version(
         if !found {
             lines.push(format!("{} {}", tool_id, version));
         }
-        crate::config_file::write(&path, &(lines.join("\n") + "\n"))?;
+        crate::config_file::write(&path, &format!("{bom}{}{newline}", lines.join(newline)))?;
     } else {
         crate::config_file::edit_toml(&config, |doc| {
             crate::config_file::set_tool(doc, &tool_id, &version)
@@ -316,68 +324,72 @@ pub fn set_project_tool_version(
     Ok(true)
 }
 
-#[tauri::command]
-pub fn open_in_editor(path: String) -> Result<bool, String> {
-    #[cfg(target_os = "macos")]
-    {
-        // Prefer the `code` shim so the folder opens as a workspace.
-        if let Ok(status) = crate::env_helper::create_silent_command("code")
-            .arg(&path)
-            .status()
-        {
-            if status.success() {
-                return Ok(true);
-            }
-        }
-        for app in ["Visual Studio Code", "Cursor", "Zed", "Sublime Text"] {
-            if let Ok(status) = crate::env_helper::create_silent_command("open")
-                .args(["-a", app, &path])
-                .status()
-            {
-                if status.success() {
-                    return Ok(true);
-                }
-            }
-        }
-        Err("未检测到可用的代码编辑器（VS Code / Cursor / Zed / Sublime Text）。请先安装其中之一".into())
+/// Resolve an IPC-supplied path to a bound project directory. Launching
+/// editors and terminals is limited to the folders the user added.
+fn saved_project_dir(path: &str) -> Result<PathBuf, String> {
+    let target = normalize_project_path(path);
+    let saved = load_saved_project_paths()?
+        .iter()
+        .any(|existing| normalize_project_path(existing) == target);
+    if !saved || !target.is_dir() {
+        return Err("项目未绑定或目录不存在".into());
     }
+    Ok(target)
+}
 
-    #[cfg(target_os = "windows")]
-    {
-        // Invoke Code directly so paths containing spaces are passed as one
-        // argument. Fall back to `start` for installations that only expose a
-        // shell shim.
-        if let Ok(status) = crate::env_helper::create_silent_command("code")
-            .arg(&path)
-            .status()
-        {
-            if status.success() {
-                return Ok(true);
-            }
-        }
-        let status = crate::env_helper::create_silent_command("cmd")
-            .args(["/c", "start", "", "code", &path])
-            .status()
-            .map_err(|e| format!("打开 VS Code 失败: {}", e))?;
-        Ok(status.success())
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let status = crate::env_helper::create_silent_command("code")
-            .arg(&path)
-            .status()
-            .map_err(|e| format!("打开 VS Code 失败: {}", e))?;
-        Ok(status.success())
-    }
+/// First launcher that starts and exits successfully.
+fn launch_any(launchers: impl IntoIterator<Item = std::process::Command>) -> bool {
+    launchers
+        .into_iter()
+        .any(|mut command| command.status().is_ok_and(|status| status.success()))
 }
 
 #[tauri::command]
-pub fn open_in_terminal(path: String) -> Result<bool, String> {
+pub async fn open_in_editor(path: String) -> Result<bool, String> {
+    let dir = saved_project_dir(&path)?;
+    let silent = crate::env_helper::create_silent_command;
+    // The directory is always passed as one argument, never through a shell.
+    // On Windows the editors ship `.cmd` shims, which `Command` only finds
+    // when the extension is spelled out.
+    let shims: &[&str] = if cfg!(target_os = "windows") {
+        &["code.cmd", "cursor.cmd", "code"]
+    } else {
+        &["code", "cursor", "zed", "subl"]
+    };
+    let mut launchers: Vec<_> = shims
+        .iter()
+        .map(|shim| {
+            let mut command = silent(shim);
+            command.arg(&dir);
+            command
+        })
+        .collect();
+    if cfg!(target_os = "macos") {
+        // App bundles work without the optional command-line shims.
+        for app in ["Visual Studio Code", "Cursor", "Zed", "Sublime Text"] {
+            let mut command = silent("open");
+            command.args(["-a", app]).arg(&dir);
+            launchers.push(command);
+        }
+    }
+    if launch_any(launchers) {
+        return Ok(true);
+    }
+    Err(
+        "未检测到可用的代码编辑器（VS Code / Cursor / Zed / Sublime Text）。请先安装其中之一"
+            .into(),
+    )
+}
+
+#[tauri::command]
+pub async fn open_in_terminal(path: String) -> Result<bool, String> {
+    let dir = saved_project_dir(&path)?;
+
     #[cfg(target_os = "macos")]
     {
         let status = crate::env_helper::create_silent_command("open")
-            .args(["-a", "Terminal", &path])
+            .args(["-a", "Terminal"])
+            .arg(&dir)
             .status()
             .map_err(|e| format!("打开终端失败: {}", e))?;
         Ok(status.success())
@@ -385,36 +397,25 @@ pub fn open_in_terminal(path: String) -> Result<bool, String> {
 
     #[cfg(target_os = "windows")]
     {
-        // Prefer Windows Terminal directly; this preserves spaces and Unicode
-        // in project paths. Fall back to PowerShell when `wt.exe` is absent.
-        if let Ok(status) = crate::env_helper::create_silent_command("wt")
-            .args(["-d", &path])
-            .status()
-        {
-            if status.success() {
-                return Ok(true);
-            }
+        // Prefer Windows Terminal; fall back to a PowerShell console when
+        // `wt.exe` is absent. `current_dir` keeps spaces and Unicode intact.
+        let mut terminal = crate::env_helper::create_silent_command("wt");
+        terminal.arg("-d").arg(&dir);
+        if launch_any([terminal]) {
+            return Ok(true);
         }
-        let escaped = path.replace('\'', "''");
-        let launched = std::process::Command::new("powershell")
-            .args([
-                "-NoExit",
-                "-Command",
-                &format!("Set-Location -LiteralPath '{}';", escaped),
-            ])
+        std::process::Command::new("powershell")
+            .current_dir(&dir)
+            .arg("-NoExit")
             .spawn()
             .map_err(|e| format!("打开终端失败: {}", e))?;
-        drop(launched);
         Ok(true)
     }
 
     #[cfg(target_os = "linux")]
     {
-        let status = crate::env_helper::create_silent_command("x-terminal-emulator")
-            .args(["--working-directory", &path])
-            .status()
-            .map_err(|e| format!("打开终端失败: {}", e))?;
-        Ok(status.success())
+        crate::env_helper::open_linux_terminal(&dir, "exec \"${SHELL:-sh}\"")?;
+        Ok(true)
     }
 }
 
@@ -464,6 +465,23 @@ mod tests {
     }
 
     #[test]
+    fn keeps_the_bom_and_crlf_of_a_windows_tool_versions_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".tool-versions");
+        fs::write(&path, "\u{feff}node 20.0.0\r\npython 3.12.10\r\n").unwrap();
+        set_project_tool_version(
+            dir.path().to_string_lossy().into_owned(),
+            "node".into(),
+            "22.0.0".into(),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(path).unwrap(),
+            "\u{feff}node 22.0.0\r\npython 3.12.10\r\n"
+        );
+    }
+
+    #[test]
     fn mise_toml_without_tools_table_does_not_hide_tool_versions() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(
@@ -471,8 +489,11 @@ mod tests {
             "[env]\nNODE_ENV = \"development\"\n",
         )
         .unwrap();
-        fs::write(dir.path().join(".tool-versions"), "node 20.1.0\npython 3.12.10\n")
-            .unwrap();
+        fs::write(
+            dir.path().join(".tool-versions"),
+            "node 20.1.0\npython 3.12.10\n",
+        )
+        .unwrap();
         let (config_file, tools) = inspect_directory_tools(dir.path());
         assert_eq!(config_file.as_deref(), Some(".tool-versions"));
         assert_eq!(tools.len(), 2);
@@ -497,7 +518,10 @@ mod tests {
         let trailing = normalize_project_path(&format!("{}/", dir.path().to_string_lossy()));
         assert_eq!(plain, trailing);
         if let Some(home) = dirs::home_dir() {
-            assert_eq!(normalize_project_path("~"), home.canonicalize().unwrap_or(home));
+            assert_eq!(
+                normalize_project_path("~"),
+                home.canonicalize().unwrap_or(home)
+            );
         }
     }
 }

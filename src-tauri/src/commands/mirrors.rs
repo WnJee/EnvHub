@@ -58,6 +58,12 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
                 ping: None,
                 is_default: None,
             },
+            MirrorOption {
+                name: "官方 ghcr.io".to_string(),
+                url: BREW_OFFICIAL.to_string(),
+                ping: None,
+                is_default: None,
+            },
         ],
     });
 
@@ -521,7 +527,7 @@ pub async fn get_mirrors() -> Result<Vec<MirrorConfig>, String> {
                             .filter(|(k, _)| k.trim() == "HOMEBREW_BOTTLE_DOMAIN")
                             .map(|(_, v)| v.trim().to_string())
                     })
-                    .unwrap_or_else(|| "https://ghcr.io/v2/homebrew/core".into());
+                    .unwrap_or_else(|| BREW_OFFICIAL.into());
             } else if config.tool == "pip" {
                 let text = crate::config_file::read(&pip_path(&home))?;
                 if let Some(value) = text.lines().find_map(|l| {
@@ -601,6 +607,28 @@ fn pip_path(home: &std::path::Path) -> std::path::PathBuf {
 
 fn brew_path(home: &std::path::Path) -> std::path::PathBuf {
     home.join(".homebrew/brew.env")
+}
+
+/// Homebrew's built-in bottle domain, i.e. no mirror configured.
+const BREW_OFFICIAL: &str = "https://ghcr.io/v2/homebrew/core";
+
+/// Rewrite `brew.env` for a bottle mirror. Formula metadata comes from the
+/// JSON API, so the API domain has to follow the bottle domain; selecting the
+/// official source removes both overrides.
+fn update_brew_env(content: &str, mirror: &str) -> String {
+    let mut lines: Vec<String> = content
+        .lines()
+        .filter(|line| {
+            let key = line.split('=').next().unwrap_or("").trim();
+            !["HOMEBREW_BOTTLE_DOMAIN", "HOMEBREW_API_DOMAIN"].contains(&key)
+        })
+        .map(str::to_string)
+        .collect();
+    if mirror != BREW_OFFICIAL {
+        lines.push(format!("HOMEBREW_BOTTLE_DOMAIN={mirror}"));
+        lines.push(format!("HOMEBREW_API_DOMAIN={mirror}/api"));
+    }
+    lines.iter().map(|line| format!("{line}\n")).collect()
 }
 
 fn composer_path(home: &Path) -> Result<PathBuf, String> {
@@ -929,10 +957,11 @@ fn update_maven(content: &str, url: &str) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn set_mirror(tool: String, mirror_url: String) -> Result<bool, String> {
+    // ASCII only: PowerShell also treats typographic quotes as string delimiters.
     if !mirror_url.starts_with("https://")
         || mirror_url
             .chars()
-            .any(|c| c.is_control() || c == '\'' || c == '"')
+            .any(|c| !c.is_ascii_graphic() || "'\"`".contains(c))
     {
         return Err("Mirror must be a valid HTTPS URL".into());
     }
@@ -1030,13 +1059,7 @@ pub async fn set_mirror(tool: String, mirror_url: String) -> Result<bool, String
         }
         "brew" => {
             let path = brew_path(&home);
-            let content = replace_setting(
-                &crate::config_file::read(&path)?,
-                None,
-                "HOMEBREW_BOTTLE_DOMAIN",
-                &mirror_url,
-            )
-            .replace("HOMEBREW_BOTTLE_DOMAIN = ", "HOMEBREW_BOTTLE_DOMAIN=");
+            let content = update_brew_env(&crate::config_file::read(&path)?, &mirror_url);
             (path, content)
         }
         "docker" => {
@@ -1200,13 +1223,24 @@ pub async fn ping_mirrors() -> Result<HashMap<String, u32>, String> {
         let (url, ping) = result.map_err(|e| e.to_string())?;
         results.insert(url, ping);
     }
-    PING_CACHE.put("all", results.clone());
+    PING_CACHE.put("all", results.clone(), PING_CACHE.epoch());
     Ok(results)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn brew_env_tracks_api_domain_and_official_source_clears_it() {
+        let mirror = "https://mirrors.ustc.edu.cn/homebrew-bottles";
+        let env = update_brew_env("KEEP=1\nHOMEBREW_BOTTLE_DOMAIN=https://old\n", mirror);
+        assert_eq!(
+            env,
+            format!("KEEP=1\nHOMEBREW_BOTTLE_DOMAIN={mirror}\nHOMEBREW_API_DOMAIN={mirror}/api\n")
+        );
+        assert_eq!(update_brew_env(&env, BREW_OFFICIAL), "KEEP=1\n");
+    }
 
     #[test]
     fn parses_mirror_urls_into_host_and_port() {
@@ -1248,7 +1282,10 @@ mod tests {
             parse_host_port("https://user@example.com:9000/"),
             ("example.com".to_string(), 9000)
         );
-        assert_eq!(parse_host_port("https://[::1]:8080/"), ("::1".to_string(), 8080));
+        assert_eq!(
+            parse_host_port("https://[::1]:8080/"),
+            ("::1".to_string(), 8080)
+        );
     }
     #[test]
     fn composer_mirror_works_without_executable_and_preserves_settings() {

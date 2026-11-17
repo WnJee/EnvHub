@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::process::Stdio;
 use tauri::{AppHandle, Emitter};
-use tokio::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RemoteReleaseInfo {
@@ -15,98 +14,50 @@ pub struct RemoteReleaseInfo {
 
 #[tauri::command]
 pub async fn open_url_in_browser(url: String) -> Result<bool, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let status = env_helper::create_silent_command("open")
-            .arg(&url)
-            .status()
-            .map_err(|e| format!("无法打开浏览器: {}", e))?;
-        Ok(status.success())
+    // Only web links: the opener would otherwise launch any file or scheme handler.
+    let web_link = url.starts_with("https://") || url.starts_with("http://");
+    if !web_link || url.chars().any(char::is_control) {
+        return Err("Only http(s) links can be opened".into());
     }
-
-    #[cfg(target_os = "windows")]
-    {
-        let quoted_url = format!("\"{}\"", url.replace('"', ""));
-        let status = env_helper::create_silent_command("cmd")
-            .args(["/c", "start", "", &quoted_url])
-            .status()
-            .map_err(|e| format!("无法打开浏览器: {}", e))?;
-        Ok(status.success())
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let status = env_helper::create_silent_command("xdg-open")
-            .arg(&url)
-            .status()
-            .map_err(|e| format!("无法打开浏览器: {}", e))?;
-        Ok(status.success())
-    }
+    // ShellExecute / `open` / `xdg-open` with the URL as one argument; no shell parses it.
+    tauri_plugin_opener::open_url(&url, None::<&str>)
+        .map_err(|e| format!("无法打开浏览器: {e}"))?;
+    Ok(true)
 }
 
 #[tauri::command]
 pub async fn open_path_in_file_manager(path: String) -> Result<bool, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let status = env_helper::create_silent_command("open")
-            .args(["-R", &path])
-            .status()
-            .map_err(|e| format!("无法在访达中显示: {}", e))?;
-        Ok(status.success())
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        // Explorer expects `/select,<path>` as a single argument. Passing it
-        // as two arguments fails for many paths (especially those with spaces).
-        let select_arg = format!("/select,{}", path);
-        let status = env_helper::create_silent_command("explorer")
-            .arg(select_arg)
-            .status()
-            .map_err(|e| format!("无法在资源管理器中显示: {}", e))?;
-        // explorer.exe returns exit code 1 even when it successfully reveals the
-        // path, so `success()` is never true here. Both 0 and 1 mean "handed off".
-        Ok(matches!(status.code(), Some(0) | Some(1)))
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let status = env_helper::create_silent_command("xdg-open")
-            .arg(&path)
-            .status()
-            .map_err(|e| format!("无法在文件管理器中显示: {}", e))?;
-        Ok(status.success())
-    }
+    // Selects the item in Finder / Explorer / the freedesktop file manager
+    // without launching it.
+    tauri_plugin_opener::reveal_item_in_dir(&path)
+        .map_err(|e| format!("无法在文件管理器中显示: {e}"))?;
+    Ok(true)
 }
 
-#[tauri::command]
-pub async fn open_installer_file(path: String) -> Result<bool, String> {
-    #[cfg(target_os = "macos")]
-    {
-        let status = env_helper::create_silent_command("open")
-            .arg(&path)
-            .status()
-            .map_err(|e| format!("无法打开安装包: {}", e))?;
-        Ok(status.success())
-    }
+/// `(major, minor, patch, is_release)`: a pre-release sorts below its release.
+fn version_key(version: &str) -> Option<(u64, u64, u64, bool)> {
+    let version = version.trim_start_matches('v');
+    let (core, release) = match version.split_once('-') {
+        Some((core, _)) => (core, false),
+        None => (version, true),
+    };
+    let mut parts = core
+        .split('+')
+        .next()?
+        .split('.')
+        .map(|part| part.parse::<u64>().ok());
+    Some((
+        parts.next()??,
+        parts.next().unwrap_or(Some(0))?,
+        parts.next().unwrap_or(Some(0))?,
+        release,
+    ))
+}
 
-    #[cfg(target_os = "windows")]
-    {
-        let quoted_path = format!("\"{}\"", path.replace('"', ""));
-        let status = env_helper::create_silent_command("cmd")
-            .args(["/c", "start", "", &quoted_path])
-            .status()
-            .map_err(|e| format!("无法打开安装包: {}", e))?;
-        Ok(status.success())
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        let status = env_helper::create_silent_command("xdg-open")
-            .arg(&path)
-            .status()
-            .map_err(|e| format!("无法打开安装包: {}", e))?;
-        Ok(status.success())
+fn is_newer(candidate: &str, current: &str) -> bool {
+    match (version_key(candidate), version_key(current)) {
+        (Some(candidate), Some(current)) => candidate > current,
+        _ => false,
     }
 }
 
@@ -145,9 +96,7 @@ fn expected_digest(manifest: &str, filename: &str) -> Option<String> {
         let digest = fields.next()?;
         let name = fields.next()?.trim_start_matches('*');
         let name = name.strip_prefix("./").unwrap_or(name);
-        (digest.len() == 64
-            && digest.chars().all(|c| c.is_ascii_hexdigit())
-            && name == filename)
+        (digest.len() == 64 && digest.chars().all(|c| c.is_ascii_hexdigit()) && name == filename)
             .then(|| digest.to_ascii_lowercase())
     })
 }
@@ -195,8 +144,7 @@ fn purge_previous_recoveries(parent: &std::path::Path) {
             continue;
         }
         let path = entry.path();
-        let _ = std::fs::remove_dir_all(&path)
-            .or_else(|_| std::fs::remove_file(&path));
+        let _ = std::fs::remove_dir_all(&path).or_else(|_| std::fs::remove_file(&path));
     }
 }
 
@@ -330,6 +278,10 @@ pub async fn download_and_install_update(
 ) -> Result<String, String> {
     let _operation = env_helper::begin_operation()?;
     env_helper::validate_target("envhub", &version)?;
+    let current = env!("CARGO_PKG_VERSION");
+    if !is_newer(&version, current) {
+        return Err(format!("v{version} 不高于当前版本 v{current}，已拒绝安装"));
+    }
     let prefix = format!("https://github.com/WnJee/EnvHub/releases/download/v{version}/");
     if !download_url.starts_with(&prefix) {
         return Err("Update URL must point to the selected official release".into());
@@ -366,9 +318,8 @@ pub async fn download_and_install_update(
     let manifest = fetch_release_manifest(&prefix).await.map_err(|error| {
         format!("无法获取该版本的校验清单 SHA256SUMS.txt（{error}）。为避免安装被篡改的安装包，更新已中止。")
     })?;
-    let expected_hash = expected_digest(&manifest, filename).ok_or_else(|| {
-        format!("校验清单中没有 {filename} 的 SHA-256 摘要，更新已中止")
-    })?;
+    let expected_hash = expected_digest(&manifest, filename)
+        .ok_or_else(|| format!("校验清单中没有 {filename} 的 SHA-256 摘要，更新已中止"))?;
     #[cfg(target_os = "linux")]
     let destination = std::env::var_os("APPIMAGE").map(PathBuf::from).filter(|p| p.is_file())
         .ok_or("This installation is managed by the system package manager. Download its deb/rpm package and update with that manager.")?;
@@ -411,33 +362,35 @@ pub async fn download_and_install_update(
     let stderr = child.stderr.take().ok_or("Missing download stderr")?;
     let progress_app = app.clone();
     let reader = tokio::spawn(async move {
-        let mut reader = BufReader::new(stderr);
-        let mut bytes = Vec::new();
         let mut message = String::new();
-        while let Ok(count) = reader.read_until(b'\r', &mut bytes).await {
-            if count == 0 {
-                break;
-            }
-            let line = String::from_utf8_lossy(&bytes);
-            if let Some(progress) = download_percent(&line) {
+        // curl redraws its progress bar with carriage returns.
+        env_helper::forward_lines(stderr, b'\r', |line| {
+            if let Some(progress) = download_percent(line) {
                 let _ = progress_app.emit("update-download-progress", progress.max(5));
-            } else if message.len() < 8192 {
+            } else if message.len() < 8192 && !line.trim().is_empty() {
                 message.extend(line.chars().take(2048));
+                message.push('\n');
             }
-            bytes.clear();
-        }
+        })
+        .await;
         message
     });
     let status = child.wait().await.map_err(|e| e.to_string())?;
     env_helper::clear_active_install_pid(pid);
     let details = reader.await.map_err(|e| e.to_string())?;
     if !status.success() {
-        return Err(format!("Download failed or cancelled: {status}: {details}"));
+        return Err(format!(
+            "Download failed or cancelled: {status}: {}",
+            details.trim()
+        ));
     }
     if std::fs::metadata(&target).map_err(|e| e.to_string())?.len() == 0 {
         return Err("Empty update package".into());
     }
-    let _ = app.emit("install-log", format!("正在校验 {filename} 的 SHA-256 完整性..."));
+    let _ = app.emit(
+        "install-log",
+        format!("正在校验 {filename} 的 SHA-256 完整性..."),
+    );
     let actual_hash = sha256_hex(&target)?;
     if actual_hash != expected_hash {
         let _ = std::fs::remove_file(&target);
@@ -660,6 +613,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_strictly_newer_versions_are_installable() {
+        assert!(is_newer("0.3.0", "0.2.23"));
+        assert!(is_newer("v0.2.24", "0.2.23"));
+        assert!(is_newer("0.3.0", "0.3.0-beta.1"));
+        assert!(!is_newer("0.3.0-beta.1", "0.3.0"));
+        assert!(!is_newer("0.2.23", "0.2.23"));
+        assert!(!is_newer("0.2.9", "0.2.23"));
+        assert!(!is_newer("latest", "0.2.23"));
+    }
+
+    #[test]
     fn parses_sha256sum_manifest() {
         let digest = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
         let manifest = format!(
@@ -669,7 +633,10 @@ mod tests {
             expected_digest(&manifest, "EnvHub_0.2.21_universal.dmg").as_deref(),
             Some(digest)
         );
-        assert_eq!(expected_digest(&manifest, "other.exe").unwrap(), "0".repeat(64));
+        assert_eq!(
+            expected_digest(&manifest, "other.exe").unwrap(),
+            "0".repeat(64)
+        );
         assert!(expected_digest(&manifest, "missing.dmg").is_none());
         assert!(expected_digest("", "anything.dmg").is_none());
         assert!(expected_digest("nothex  x.dmg", "x.dmg").is_none());

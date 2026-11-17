@@ -15,13 +15,13 @@ body {
   padding: 0;
   background-color: var(--background);
   color: var(--foreground);
-  font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  font-family: 'Plus Jakarta Sans Variable', system-ui, -apple-system, sans-serif;
   user-select: none;
   -webkit-font-smoothing: antialiased;
 }
 
 code, pre, .font-mono {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono Variable', monospace;
 }
 
 /* Custom Scrollbars */

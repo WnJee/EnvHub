@@ -1,5 +1,5 @@
 import { api, isTauri } from './tauri';
-import { isWindows, isLinux } from '../utils/platform';
+import { getPlatform } from '../utils/platform';
 
 export interface UpdateInfo {
   hasUpdate: boolean;
@@ -43,51 +43,30 @@ export async function resolveAppVersion(): Promise<string> {
   return resolvedAppVersion;
 }
 
+/** `[major, minor, patch, isRelease]`: a pre-release sorts below its release. */
+function versionKey(version: string): number[] {
+  const [core, preRelease] = version.replace(/^v/, '').split('+')[0].split('-', 2);
+  const parts = core.split('.').map((n) => parseInt(n, 10) || 0);
+  return [parts[0] || 0, parts[1] || 0, parts[2] || 0, preRelease === undefined ? 1 : 0];
+}
+
 /**
  * Compare two semver strings (e.g. "0.1.1" vs "0.1.0")
  * Returns 1 if v1 > v2, -1 if v1 < v2, 0 if equal
  */
 export function compareVersions(v1: string, v2: string): number {
-  const clean1 = v1.replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
-  const clean2 = v2.replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
-
-  const len = Math.max(clean1.length, clean2.length);
-  for (let i = 0; i < len; i++) {
-    const num1 = clean1[i] || 0;
-    const num2 = clean2[i] || 0;
-    if (num1 > num2) return 1;
-    if (num1 < num2) return -1;
+  const key1 = versionKey(v1);
+  const key2 = versionKey(v2);
+  for (let i = 0; i < key1.length; i++) {
+    if (key1[i] !== key2[i]) return key1[i] > key2[i] ? 1 : -1;
   }
   return 0;
 }
 
-function decodeHtmlEntities(str: string): string {
-  return str
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
-}
-
-function cleanHtmlToMarkdown(html: string): string {
-  return decodeHtmlEntities(html)
-    .replace(/<h3>(.*?)<\/h3>/gi, '### $1\n')
-    .replace(/<h4>(.*?)<\/h4>/gi, '#### $1\n')
-    .replace(/<h5>(.*?)<\/h5>/gi, '##### $1\n')
-    .replace(/<strong>(.*?)<\/strong>/gi, '**$1**')
-    .replace(/<b>(.*?)<\/b>/gi, '**$1**')
-    .replace(/<code>(.*?)<\/code>/gi, '`$1`')
-    .replace(/<li>(.*?)<\/li>/gi, '- $1\n')
-    .replace(/<\/?(ul|ol|p|div|span)>/gi, '\n')
-    .replace(/\n\s*\n\s*\n/g, '\n\n')
-    .trim();
-}
-
 /**
  * `AbortSignal.timeout()` only exists in WebKitGTK >= 2.40 / Safari 16+, so on
- * older Linux distros all four update-check fallbacks threw a TypeError and the
- * updater silently never worked. Fall back to a plain AbortController.
+ * older Linux distros the update check threw a TypeError and silently never
+ * worked. Fall back to a plain AbortController.
  */
 function timeoutSignal(ms: number): AbortSignal {
   const factory = (AbortSignal as unknown as { timeout?: (ms: number) => AbortSignal }).timeout;
@@ -97,140 +76,75 @@ function timeoutSignal(ms: number): AbortSignal {
   return controller.signal;
 }
 
-function getPlatformDownloadUrl(latestVer: string): string {
-  if (isWindows()) {
-    return `https://github.com/WnJee/EnvHub/releases/download/v${latestVer}/EnvHub_${latestVer}_x64-setup.exe`;
+/**
+ * Installer published for this machine, or `null` when the release has none
+ * (Linux builds are x86_64 only; Windows on ARM runs the x64 installer).
+ */
+function installerSuffix(arch: string): string | null {
+  switch (getPlatform()) {
+    case 'windows':
+      return '_x64-setup.exe';
+    case 'linux':
+      return arch === 'x86_64' ? '_amd64.AppImage' : null;
+    default:
+      return '_universal.dmg';
   }
-  if (isLinux()) {
-    return `https://github.com/WnJee/EnvHub/releases/download/v${latestVer}/EnvHub_${latestVer}_amd64.AppImage`;
-  }
-  return `https://github.com/WnJee/EnvHub/releases/download/v${latestVer}/EnvHub_${latestVer}_universal.dmg`;
+}
+
+interface LatestRelease {
+  tag: string;
+  title?: string;
+  notes?: string;
+  url?: string;
+  publishedAt?: string;
 }
 
 /**
- * Check for updates with multi-tier fallback (Backend curl -> GitHub API -> releases.atom -> redirect)
+ * Backend first (curl, no CORS limits), GitHub REST API second. The Atom feed
+ * and the `/releases/latest` redirect send no CORS headers, so only the backend
+ * can use them.
  */
-export async function checkForUpdates(currentVersion: string = CURRENT_APP_VERSION): Promise<UpdateInfo> {
-  let latestVer = '';
-  let releaseTitle = '';
-  let releaseNotes = '';
-  let releaseUrl = '';
-  let publishedAt = '';
-  let downloadUrl = '';
-
-  // Tier 1: Try Tauri backend if in desktop app (bypasses browser CORS & direct curl)
+async function fetchLatestRelease(): Promise<LatestRelease> {
   if (isTauri()) {
     try {
       const info = await api.checkGithubLatestRelease();
-      if (info && info.tag_name) {
-        latestVer = info.tag_name.replace(/^v/, '');
-        releaseNotes = info.body || '';
-        releaseUrl = info.html_url || `https://github.com/WnJee/EnvHub/releases/tag/v${latestVer}`;
-        publishedAt = info.published_at ? new Date(info.published_at).toLocaleDateString() : '';
+      if (info?.tag_name) {
+        return { tag: info.tag_name, notes: info.body, url: info.html_url, publishedAt: info.published_at };
       }
     } catch (err) {
-      console.warn('Backend update check failed, trying fallback:', err);
+      console.warn('Backend update check failed, trying GitHub API:', err);
     }
   }
 
-  // Tier 2: Try GitHub REST API
-  if (!latestVer) {
-    try {
-      const response = await fetch('https://api.github.com/repos/WnJee/EnvHub/releases/latest', {
-        headers: { Accept: 'application/vnd.github.v3+json' },
-        cache: 'no-cache', signal: timeoutSignal(10000),
-      });
-      if (response.ok) {
-        const data = await response.json();
-        latestVer = (data.tag_name || '').replace(/^v/, '');
-        releaseTitle = data.name || '';
-        releaseNotes = data.body || '';
-        releaseUrl = data.html_url || `https://github.com/WnJee/EnvHub/releases/tag/v${latestVer}`;
-        publishedAt = data.published_at ? new Date(data.published_at).toLocaleDateString() : '';
+  const response = await fetch('https://api.github.com/repos/WnJee/EnvHub/releases/latest', {
+    headers: { Accept: 'application/vnd.github.v3+json' },
+    cache: 'no-cache',
+    signal: timeoutSignal(10000),
+  });
+  const data = response.ok ? await response.json() : null;
+  if (!data?.tag_name) throw new Error('无法连接更新服务');
+  return { tag: data.tag_name, title: data.name, notes: data.body, url: data.html_url, publishedAt: data.published_at };
+}
 
-        // Check assets
-        if (data.assets && Array.isArray(data.assets) && data.assets.length > 0) {
-          if (isWindows()) {
-            const winAsset = data.assets.find((a: any) => a.name.endsWith('_x64-setup.exe'));
-            if (winAsset) downloadUrl = winAsset.browser_download_url;
-          } else if (isLinux()) {
-            const linuxAsset = data.assets.find((a: any) => a.name.endsWith('_amd64.AppImage'));
-            if (linuxAsset) downloadUrl = linuxAsset.browser_download_url;
-          } else {
-            const macAsset = data.assets.find((a: any) => a.name.endsWith('_universal.dmg'));
-            if (macAsset) downloadUrl = macAsset.browser_download_url;
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('GitHub API check failed, falling back to atom feed:', e);
-    }
-  }
-
-  // Tier 3: Fallback to GitHub releases.atom (Zero rate limits, always works)
-  if (!latestVer) {
-    try {
-      const response = await fetch('https://github.com/WnJee/EnvHub/releases.atom', { cache: 'no-cache', signal: timeoutSignal(10000) });
-      if (response.ok) {
-        const xml = await response.text();
-        const entryMatch = xml.match(/<entry>([\s\S]*?)<\/entry>/);
-        if (entryMatch) {
-          const entry = entryMatch[1];
-          const tagMatch = entry.match(/\/releases\/tag\/([^\"'\/<>\s]+)/);
-          const titleMatch = entry.match(/<title>([\s\S]*?)<\/title>/);
-          const updatedMatch = entry.match(/<updated>([\s\S]*?)<\/updated>/);
-          const contentMatch = entry.match(/<content type=\"html\">([\s\S]*?)<\/content>/);
-
-          if (tagMatch) {
-            latestVer = tagMatch[1].replace(/^v/, '');
-          }
-          if (titleMatch) {
-            releaseTitle = decodeHtmlEntities(titleMatch[1]);
-          }
-          if (contentMatch) {
-            releaseNotes = cleanHtmlToMarkdown(contentMatch[1]);
-          }
-          if (updatedMatch) {
-            publishedAt = new Date(updatedMatch[1]).toLocaleDateString();
-          }
-          releaseUrl = `https://github.com/WnJee/EnvHub/releases/tag/v${latestVer}`;
-        }
-      }
-    } catch (e) {
-      console.warn('releases.atom check failed, trying redirect:', e);
-    }
-  }
-
-  // Tier 4: Fallback to GitHub latest release redirect URL
-  if (!latestVer) {
-    try {
-      const res = await fetch('https://github.com/WnJee/EnvHub/releases/latest', { method: 'HEAD', signal: timeoutSignal(10000) });
-      if (res.url && res.url.includes('/releases/tag/')) {
-        const tag = res.url.split('/releases/tag/')[1].split('/')[0];
-        latestVer = tag.replace(/^v/, '');
-        releaseUrl = res.url;
-      }
-    } catch (e) {
-      console.warn('redirect check failed:', e);
-    }
-  }
-
-  if (!latestVer) throw new Error('无法连接更新服务');
-
-  if (!downloadUrl) {
-    downloadUrl = getPlatformDownloadUrl(latestVer);
-  }
-
-  const hasUpdate = compareVersions(latestVer, currentVersion) > 0;
+/** `arch` is the backend's `SystemStatus.arch`. */
+export async function checkForUpdates(
+  currentVersion: string = CURRENT_APP_VERSION,
+  arch = 'x86_64'
+): Promise<UpdateInfo> {
+  const release = await fetchLatestRelease();
+  const latestVersion = release.tag.replace(/^v/, '');
+  const suffix = installerSuffix(arch);
 
   return {
-    hasUpdate,
-    latestVersion: latestVer,
+    hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
+    latestVersion,
     currentVersion,
-    releaseTitle: releaseTitle || `EnvHub v${latestVer}`,
-    releaseNotes: releaseNotes || '修复已知问题与体验优化',
-    releaseUrl: releaseUrl || `https://github.com/WnJee/EnvHub/releases/tag/v${latestVer}`,
-    publishedAt: publishedAt || new Date().toLocaleDateString(),
-    downloadUrl,
+    releaseTitle: release.title || `EnvHub v${latestVersion}`,
+    releaseNotes: release.notes || '修复已知问题与体验优化',
+    releaseUrl: release.url || `https://github.com/WnJee/EnvHub/releases/tag/v${latestVersion}`,
+    publishedAt: new Date(release.publishedAt || Date.now()).toLocaleDateString(),
+    downloadUrl: suffix
+      ? `https://github.com/WnJee/EnvHub/releases/download/v${latestVersion}/EnvHub_${latestVersion}${suffix}`
+      : undefined,
   };
 }

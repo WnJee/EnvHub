@@ -88,6 +88,27 @@ pub fn checked_output(output: std::process::Output) -> Result<std::process::Outp
     }
 }
 
+/// Feed a child pipe to `on_line` one record at a time, decoding lossily.
+///
+/// Package managers on a GBK / Shift-JIS Windows console emit non-UTF-8 bytes.
+/// A strict `lines()` reader stops at the first one, which drops the pipe and
+/// stalls or kills the child mid-install.
+pub async fn forward_lines<R>(pipe: R, delimiter: u8, mut on_line: impl FnMut(&str))
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncBufReadExt;
+    let mut reader = tokio::io::BufReader::new(pipe);
+    let mut bytes = Vec::new();
+    loop {
+        bytes.clear();
+        match reader.read_until(delimiter, &mut bytes).await {
+            Ok(0) | Err(_) => break,
+            Ok(_) => on_line(String::from_utf8_lossy(&bytes).trim_end_matches(['\r', '\n'])),
+        }
+    }
+}
+
 pub fn set_active_install_pid(pid: Option<u32>) {
     ACTIVE_INSTALL_PID.store(pid.unwrap_or(0), Ordering::SeqCst);
 }
@@ -250,7 +271,10 @@ fn latest_versioned_dir(base: &std::path::Path) -> Option<PathBuf> {
 fn parse_reg_query_output(stdout: &str) -> Option<String> {
     for line in stdout.lines() {
         let trimmed = line.trim();
-        let Some(rest) = trimmed.strip_prefix("Path").or_else(|| trimmed.strip_prefix("PATH")) else {
+        let Some(rest) = trimmed
+            .strip_prefix("Path")
+            .or_else(|| trimmed.strip_prefix("PATH"))
+        else {
             continue;
         };
         let rest = rest.trim_start();
@@ -559,6 +583,14 @@ pub async fn save_mise_path(path: String) -> Result<String, String> {
     if !path.is_file() {
         return Err("Mise path must be an executable file".into());
     }
+    // The file is executed below, so it has to be named like the Mise binary.
+    let named_mise = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("mise"));
+    if !named_mise {
+        return Err("Mise path must point to the mise executable".into());
+    }
     let output = checked_output(
         output_timeout(
             create_silent_tokio_command(&path.to_string_lossy()).arg("--version"),
@@ -588,6 +620,51 @@ pub async fn save_mise_path(path: String) -> Result<String, String> {
     Ok(path.to_string_lossy().into_owned())
 }
 
+/// Terminal emulators in preference order, with the flag that introduces the
+/// command to run (`None`: the command directly follows the program name).
+const LINUX_TERMINALS: [(&str, Option<&str>); 7] = [
+    ("x-terminal-emulator", Some("-e")),
+    ("gnome-terminal", Some("--")),
+    ("konsole", Some("-e")),
+    ("xfce4-terminal", Some("-x")),
+    ("alacritty", Some("-e")),
+    ("kitty", None),
+    ("xterm", Some("-e")),
+];
+
+/// Argument list that makes `terminal` run `script` inside `dir`.
+fn linux_terminal_args(
+    exec_flag: Option<&str>,
+    dir: &std::path::Path,
+    script: &str,
+) -> Vec<String> {
+    let command = format!("cd {} && {script}", shell_quote(&dir.to_string_lossy()));
+    exec_flag
+        .into_iter()
+        .chain(["sh", "-lc", &command])
+        .map(str::to_string)
+        .collect()
+}
+
+/// Open the first installed terminal emulator and run `script` in `dir`.
+/// `x-terminal-emulator` only exists on Debian-family systems.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn open_linux_terminal(dir: &std::path::Path, script: &str) -> Result<(), String> {
+    let (terminal, exec_flag) = LINUX_TERMINALS
+        .into_iter()
+        .find(|(name, _)| command_available(name))
+        .ok_or("未检测到可用的终端模拟器（gnome-terminal / konsole / xfce4-terminal / alacritty / kitty / xterm）")?;
+    let mut child = create_silent_command(terminal)
+        .args(linux_terminal_args(exec_flag, dir, script))
+        .spawn()
+        .map_err(|e| format!("打开终端失败: {e}"))?;
+    // Reap in the background: the window stays open for as long as the user likes.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
 /// Check for command shims such as Scoop's `.cmd`/`.ps1` files.
 pub fn command_available(name: &str) -> bool {
     let path = augmented_path();
@@ -608,6 +685,28 @@ pub fn command_available(name: &str) -> bool {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn forward_lines_survives_non_utf8_output() {
+        // GBK bytes for a CJK character, then a CRLF-terminated ASCII line.
+        let pipe: &[u8] = &[
+            0xC4, 0xE3, b'\n', b'o', b'k', b'\r', b'\n', b'e', b'n', b'd',
+        ];
+        let mut lines = Vec::new();
+        forward_lines(pipe, b'\n', |line| lines.push(line.to_string())).await;
+        assert_eq!(lines.len(), 3);
+        assert_eq!(&lines[1..], ["ok", "end"]);
+    }
+
+    #[test]
+    fn linux_terminal_command_enters_the_directory_first() {
+        let dir = std::path::Path::new("/tmp/R&D it's");
+        assert_eq!(
+            linux_terminal_args(Some("--"), dir, "exec sh"),
+            ["--", "sh", "-lc", "cd '/tmp/R&D it'\"'\"'s' && exec sh"]
+        );
+        assert_eq!(linux_terminal_args(None, dir, "x")[..2], ["sh", "-lc"]);
+    }
+
     #[test]
     fn parses_reg_query_path_value_with_spaces() {
         let stdout = "\r\nHKEY_CURRENT_USER\\Environment\r\n    Path    REG_EXPAND_SZ    %USERPROFILE%\\AppData\\Local\\Microsoft\\WinGet\\Links;C:\\Program Files\\Tools\\bin\r\n\r\n";
@@ -623,7 +722,12 @@ mod tests {
         // yields an error message rather than a value.
         let stdout = "HKEY_CURRENT_USER\\Environment\r\n    TEMP    REG_EXPAND_SZ    %USERPROFILE%\\AppData\\Local\\Temp\r\n";
         assert_eq!(parse_reg_query_output(stdout), None);
-        assert_eq!(parse_reg_query_output("ERROR: The system was unable to find the specified registry key or value.\r\n"), None);
+        assert_eq!(
+            parse_reg_query_output(
+                "ERROR: The system was unable to find the specified registry key or value.\r\n"
+            ),
+            None
+        );
     }
 
     #[test]
@@ -663,7 +767,9 @@ mod tests {
         let mut sorted = entries.clone();
         sorted.dedup();
         assert_eq!(sorted.len(), entries.len(), "duplicate entries in PATH");
-        let first_system = entries.iter().position(|p| p == std::path::Path::new("/usr/bin"));
+        let first_system = entries
+            .iter()
+            .position(|p| p == std::path::Path::new("/usr/bin"));
         let last_shim = entries
             .iter()
             .rposition(|p| p.to_string_lossy().contains("shims"));

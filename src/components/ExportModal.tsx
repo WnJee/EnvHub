@@ -200,7 +200,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                将当前机器的语言运行时版本、国内镜像源与环境变量一键导出为自动化安装脚本
+                将当前机器的语言运行时版本导出为自动化安装脚本，可附带推荐的国内镜像源配置
               </p>
             </div>
           </div>

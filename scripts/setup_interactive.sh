@@ -60,19 +60,8 @@ ensure_mise() {
 
   log_warn "未在当前系统中检测到 Mise，开始自动安装..."
 
-  # 检测网络连通性
-  USE_MIRROR=0
-  if ! curl -Is --connect-timeout 3 https://raw.githubusercontent.com >/dev/null 2>&1; then
-    log_warn "检测到 GitHub 连接较慢，正在切换至备用加速通道..."
-    USE_MIRROR=1
-  fi
-
   mkdir -p "$HOME/.local/bin"
-  if [ "$USE_MIRROR" -eq 1 ]; then
-    curl -fsSL https://mise.run | sh || curl -fsSL https://mise.jdx.dev/install.sh | sh
-  else
-    curl -fsSL https://mise.run | sh
-  fi
+  curl -fsSL https://mise.run | sh || curl -fsSL https://mise.jdx.dev/install.sh | sh
 
   MISE_BIN="$HOME/.local/bin/mise"
   if [ ! -x "$MISE_BIN" ]; then
@@ -86,17 +75,15 @@ ensure_mise() {
   setup_shell_profile() {
     local rc_file="$1"
     local hook_cmd="$2"
-    if [ -f "$rc_file" ]; then
-      if ! grep -q "mise activate" "$rc_file" 2>/dev/null; then
-        echo -e "\n# Mise Version Manager Hook\n$hook_cmd" >> "$rc_file"
-        log_succ "已注入 Mise 激活钩子 -> $rc_file"
-      fi
-    else
-      touch "$rc_file"
-      echo -e "# Mise Version Manager Hook\n$hook_cmd" >> "$rc_file"
-      log_succ "已创建并注入 Mise 激活钩子 -> $rc_file"
+    if grep -qs -e "mise activate" -e "mise/shims" "$rc_file"; then
+      return 0
     fi
+    printf '\n# Mise Version Manager Hook\n%s\n' "$hook_cmd" >> "$rc_file"
+    log_succ "已注入 Mise 激活钩子 -> $rc_file"
   }
+
+  # ~/.profile is also read by sh/dash, so it only gets a POSIX PATH line.
+  local shims_path='export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$PATH"'
 
   CURRENT_SHELL="$(basename "${SHELL:-bash}")"
   case "$CURRENT_SHELL" in
@@ -106,10 +93,18 @@ ensure_mise() {
       ;;
     bash)
       setup_shell_profile "$HOME/.bashrc" 'eval "$(mise activate bash)"'
-      setup_shell_profile "$HOME/.bash_profile" 'eval "$(mise activate bash)"'
+      # Bash reads only the first of these that exists; creating
+      # ~/.bash_profile would hide an existing ~/.profile.
+      if [ -f "$HOME/.bash_profile" ]; then
+        setup_shell_profile "$HOME/.bash_profile" 'eval "$(mise activate bash)"'
+      elif [ -f "$HOME/.bash_login" ]; then
+        setup_shell_profile "$HOME/.bash_login" 'eval "$(mise activate bash)"'
+      else
+        setup_shell_profile "$HOME/.profile" "$shims_path"
+      fi
       ;;
     *)
-      setup_shell_profile "$HOME/.profile" 'eval "$(mise activate bash)"'
+      setup_shell_profile "$HOME/.profile" "$shims_path"
       ;;
   esac
 
@@ -119,41 +114,68 @@ ensure_mise() {
 # ==============================================================================
 # 阶段 2: 检查并询问安装包管理器
 # ==============================================================================
+load_brew_env() {
+  local brew_bin
+  for brew_bin in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+    if [ -x "$brew_bin" ]; then eval "$("$brew_bin" shellenv)"; fi
+  done
+  command -v brew &>/dev/null
+}
+
+# Runs Homebrew's own installer. The USTC mirror serves an unmodified copy of
+# it and is used only after the user agrees.
+install_homebrew() {
+  local installer_url="https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
+  if ! curl -Is --connect-timeout 5 https://raw.githubusercontent.com >/dev/null 2>&1; then
+    log_warn "无法连接 GitHub。"
+    read -r -p "是否改用中科大 (USTC) 镜像安装 Homebrew？[Y/n]: " use_mirror <&3 || exit 0
+    if [[ "${use_mirror:-Y}" =~ ^[Yy]$ ]]; then
+      installer_url="https://mirrors.ustc.edu.cn/misc/brew-install.sh"
+      export HOMEBREW_BREW_GIT_REMOTE="https://mirrors.ustc.edu.cn/brew.git"
+      export HOMEBREW_CORE_GIT_REMOTE="https://mirrors.ustc.edu.cn/homebrew-core.git"
+      export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles"
+      export HOMEBREW_API_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles/api"
+    fi
+  fi
+
+  local installer
+  if ! installer="$(curl -fsSL --connect-timeout 10 "$installer_url")" || [ -z "$installer" ]; then
+    log_err "下载 Homebrew 安装脚本失败: $installer_url"
+    return 1
+  fi
+  # The installer prompts for RETURN and the sudo password on stdin.
+  /bin/bash -c "$installer" <&3
+
+  if load_brew_env; then
+    log_succ "Homebrew 安装完成: $(brew --version | head -n 1)"
+  else
+    log_err "Homebrew 安装未完成，请根据上方输出排查后重试。"
+    return 1
+  fi
+}
+
 ensure_package_manager() {
   log_step "步骤 2: 检查系统包管理器状态"
   OS_TYPE="$(uname -s)"
 
   if [ "$OS_TYPE" = "Darwin" ]; then
     # macOS - 检查 Homebrew
-    if command -v brew &>/dev/null || [ -x "/opt/homebrew/bin/brew" ] || [ -x "/usr/local/bin/brew" ]; then
-      if [ -x "/opt/homebrew/bin/brew" ]; then eval "$(/opt/homebrew/bin/brew shellenv)"; fi
-      if [ -x "/usr/local/bin/brew" ]; then eval "$(/usr/local/bin/brew shellenv)"; fi
+    if load_brew_env; then
       log_succ "检测到 macOS 包管理器 (Homebrew) 已就绪: $(brew --version | head -n 1)"
       PKG_MGR="Homebrew"
       return 0
     fi
 
+    PKG_MGR="未安装"
     log_warn "未检测到 macOS 系统包管理器 (Homebrew)。"
     echo -e "${YELLOW}Homebrew 是 macOS 上安装 Git、数据库与开发中间件所必需的底层工具包管理器。${NC}"
     read -r -p "是否立即安装 Homebrew？[Y/n]: " choice <&3 || exit 0
     choice="${choice:-Y}"
 
     if [[ "$choice" =~ ^[Yy]$ ]]; then
-      log_info "正在为您配置 Homebrew 安装环境..."
-      if ! curl -Is --connect-timeout 3 https://raw.githubusercontent.com >/dev/null 2>&1; then
-        log_info "启用国内高速镜像进行 Homebrew 安装..."
-        /bin/zsh -c "$(curl -fsSL https://gitee.com/cunkai/HomebrewCN/raw/master/Homebrew.sh)"
-      else
-        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-      fi
-
-      if [ -x "/opt/homebrew/bin/brew" ]; then eval "$(/opt/homebrew/bin/brew shellenv)"; fi
-      if [ -x "/usr/local/bin/brew" ]; then eval "$(/usr/local/bin/brew shellenv)"; fi
-      log_succ "Homebrew 安装配置流程已完成！"
-      PKG_MGR="Homebrew"
+      if install_homebrew; then PKG_MGR="Homebrew"; fi
     else
       log_info "已跳过 Homebrew 安装。"
-      PKG_MGR="未安装"
     fi
 
   elif [ "$OS_TYPE" = "Linux" ]; then
@@ -257,12 +279,6 @@ replace-with = 'ustc'
 registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"
 EOF
     log_succ "Cargo 镜像源 -> 中科大 Crates.io 镜像"
-  fi
-
-  # Homebrew Bottles
-  if command -v brew &>/dev/null; then
-    export HOMEBREW_BOTTLE_DOMAIN="https://mirrors.ustc.edu.cn/homebrew-bottles"
-    log_succ "Homebrew Bottles -> 中科大镜像加速"
   fi
 
   log_succ "国内镜像源加速配置完成！"
@@ -502,6 +518,18 @@ main_menu() {
 }
 
 # --- 执行入口 ---
+# `--homebrew`: EnvHub 桌面端只调用 Homebrew 安装阶段。
+if [ "${1:-}" = "--homebrew" ]; then
+  log_step "安装 Homebrew"
+  if load_brew_env; then
+    log_succ "Homebrew 已就绪: $(brew --version | head -n 1)"
+  else
+    install_homebrew
+  fi
+  press_enter
+  exit 0
+fi
+
 ensure_mise
 ensure_package_manager
 main_menu

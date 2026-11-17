@@ -63,7 +63,6 @@ pub fn run() {
             open_url_in_browser,
             download_and_install_update,
             open_path_in_file_manager,
-            open_installer_file,
             relaunch_application,
             check_github_latest_release,
         ])

@@ -223,8 +223,9 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({
   };
 
   const handleStartInAppDownload = async () => {
-    const url = updateInfo.downloadUrl || updateInfo.releaseUrl;
-    if (!url) return;
+    const url = updateInfo.downloadUrl;
+    // No installer is published for this platform; the release page lists the rest.
+    if (!url) return handleOpenRelease();
 
     setDownloadStatus('downloading');
     cancelledRef.current = false;
