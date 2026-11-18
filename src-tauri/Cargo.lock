@@ -970,7 +970,7 @@ dependencies = [
 
 [[package]]
 name = "envhub"
-version = "0.2.24"
+version = "0.2.25"
 dependencies = [
  "dirs 5.0.1",
  "dunce",
