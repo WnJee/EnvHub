@@ -1,4 +1,4 @@
-import { RuntimeTool, ProjectEnv, SystemTool, MirrorConfig, EnvHealthCheck, SystemStatus } from '../types';
+import { RuntimeTool, ProjectEnv, SystemTool, MirrorConfig, EnvHealthCheck, SystemStatus, InstallProgressDetail } from '../types';
 
 // Check if running inside Tauri
 export const isTauri = () => {
@@ -7,12 +7,15 @@ export const isTauri = () => {
 
 type InstallCommand = 'install_runtime_version' | 'install_system_tool' | 'bootstrap_mise_cli';
 
-// Run an install command while forwarding its `install-log` / `install-progress` events.
+// Run an install command while forwarding its `install-log` / `install-progress`
+// events. `install-progress-detail` carries the installer's real byte counts,
+// speed and remaining time; the plain percentage still drives the bar.
 async function streamInstall(
   command: InstallCommand,
   args: Record<string, string>,
   onLog: (log: string) => void,
-  onProgress: (percent: number) => void
+  onProgress: (percent: number) => void,
+  onDetail?: (detail: InstallProgressDetail) => void
 ): Promise<boolean> {
   if (!isTauri()) {
     onLog('[ERROR] 请在 EnvHub 桌面客户端中执行安装');
@@ -26,6 +29,11 @@ async function streamInstall(
       await listen<string>('install-log', (event) => onLog(event.payload)),
       await listen<number>('install-progress', (event) => onProgress(event.payload))
     );
+    if (onDetail) {
+      unlisteners.push(
+        await listen<InstallProgressDetail>('install-progress-detail', (event) => onDetail(event.payload))
+      );
+    }
     return await invoke<boolean>(command, args);
   } catch (err) {
     onLog(`[ERROR] 安装异常: ${err}`);
@@ -111,9 +119,10 @@ export const api = {
     toolId: string,
     version: string,
     onLog: (log: string) => void,
-    onProgress: (percent: number) => void
+    onProgress: (percent: number) => void,
+    onDetail?: (detail: InstallProgressDetail) => void
   ): Promise<boolean> {
-    return streamInstall('install_runtime_version', { toolId, version }, onLog, onProgress);
+    return streamInstall('install_runtime_version', { toolId, version }, onLog, onProgress, onDetail);
   },
 
   async cancelCurrentInstall(): Promise<boolean> {
@@ -211,9 +220,10 @@ export const api = {
   async startInstallSystemTool(
     toolId: string,
     onLog: (log: string) => void,
-    onProgress: (percent: number) => void
+    onProgress: (percent: number) => void,
+    onDetail?: (detail: InstallProgressDetail) => void
   ): Promise<boolean> {
-    return streamInstall('install_system_tool', { toolId }, onLog, onProgress);
+    return streamInstall('install_system_tool', { toolId }, onLog, onProgress, onDetail);
   },
 
   // Mirrors
@@ -271,9 +281,10 @@ export const api = {
   // Bootstrap / Install Mise CLI with real-time log streaming
   async startBootstrapMise(
     onLog: (log: string) => void,
-    onProgress: (percent: number) => void
+    onProgress: (percent: number) => void,
+    onDetail?: (detail: InstallProgressDetail) => void
   ): Promise<boolean> {
-    return streamInstall('bootstrap_mise_cli', {}, onLog, onProgress);
+    return streamInstall('bootstrap_mise_cli', {}, onLog, onProgress, onDetail);
   },
 
   // Open URL in system default browser

@@ -1,3 +1,4 @@
+use crate::commands::progress;
 use crate::env_helper;
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -1152,12 +1153,18 @@ pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool
         };
 
         let mut command = env_helper::create_silent_tokio_command("powershell");
+        // Scoop downloads through Write-Progress, which PowerShell only renders
+        // when the preference allows it — that bar is the only percentage
+        // source for this path.
         command.args([
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
-            &format!("{}; if (-not $?) {{ exit 1 }}", cmd_string),
+            &format!(
+                "$ProgressPreference = 'Continue'; {}; if (-not $?) {{ exit 1 }}",
+                cmd_string
+            ),
         ]);
         stream_install(&app, command).await
     }
@@ -1264,12 +1271,16 @@ pub async fn install_system_tool(app: AppHandle, tool_id: String) -> Result<bool
     }
 }
 
-/// Run a child to completion, forwarding both pipes to the `install-log`
-/// event. `progress` maps a stdout line to an `install-progress` value.
+/// Run a child to completion, streaming both pipes into the install modal.
+///
+/// Output is split on CR as well as LF: installers redraw their download
+/// progress with carriage returns, and those frames are the only place the real
+/// percentages and byte counts live. `ProgressTracker` turns them into
+/// `install-progress` / `install-progress-detail` events and folds the repeats
+/// into a single log line per download.
 pub(crate) async fn run_streamed(
     app: &AppHandle,
     mut command: tokio::process::Command,
-    mut progress: impl FnMut(&str) -> Option<u32> + Send + 'static,
 ) -> Result<std::process::ExitStatus, String> {
     let mut child = command
         .stdout(Stdio::piped())
@@ -1280,27 +1291,50 @@ pub(crate) async fn run_streamed(
     env_helper::set_active_install_pid(pid);
     let stdout = child.stdout.take().ok_or("Missing stdout")?;
     let stderr = child.stderr.take().ok_or("Missing stderr")?;
-    let (out_app, err_app) = (app.clone(), app.clone());
-    let out = tokio::spawn(env_helper::forward_lines(stdout, b'\n', move |line| {
-        let _ = out_app.emit("install-log", line);
-        if let Some(value) = progress(line) {
-            let _ = out_app.emit("install-progress", value);
-        }
-    }));
-    let err = tokio::spawn(env_helper::forward_lines(stderr, b'\n', move |line| {
-        let _ = err_app.emit("install-log", line);
-    }));
+    let tracker = std::sync::Arc::new(std::sync::Mutex::new(progress::ProgressTracker::new()));
+    let out = tokio::spawn(stream_records(app.clone(), stdout, tracker.clone()));
+    let err = tokio::spawn(stream_records(app.clone(), stderr, tracker.clone()));
     let status = child.wait().await.map_err(|e| e.to_string());
     let _ = tokio::join!(out, err);
     env_helper::clear_active_install_pid(pid);
+    if let Ok(status) = &status {
+        if status.success() {
+            if let Ok(mut tracker) = tracker.lock() {
+                let _ = app.emit("install-progress", 100);
+                let _ = app.emit("install-progress-detail", tracker.finish());
+            }
+        }
+    }
     status
+}
+
+async fn stream_records<R>(app: AppHandle, pipe: R, tracker: std::sync::Arc<std::sync::Mutex<progress::ProgressTracker>>)
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    env_helper::forward_records(pipe, |record| {
+        let Ok(mut tracker) = tracker.lock() else {
+            return;
+        };
+        let observation = tracker.observe(record);
+        if let Some(line) = observation.log {
+            let _ = app.emit("install-log", line.chars().take(2048).collect::<String>());
+        }
+        if let Some(percent) = observation.percent_event {
+            let _ = app.emit("install-progress", percent);
+        }
+        if let Some(detail) = observation.progress {
+            let _ = app.emit("install-progress-detail", detail);
+        }
+    })
+    .await
 }
 
 pub(crate) async fn stream_install(
     app: &AppHandle,
     command: tokio::process::Command,
 ) -> Result<bool, String> {
-    let status = run_streamed(app, command, |_| None).await?;
+    let status = run_streamed(app, command).await?;
     if !status.success() {
         return Err(format!("Installation failed or cancelled: {status}"));
     }

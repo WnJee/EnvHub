@@ -75,6 +75,25 @@ export interface EnvHealthCheck {
   fixCommand?: string;
 }
 
+export type InstallStage =
+  | 'prepare'
+  | 'download'
+  | 'verify'
+  | 'extract'
+  | 'configure'
+  | 'done';
+
+// Real numbers from the installer's own progress frames (mise/clx bar, tqdm,
+// apt), so the install modal can show bytes and a remaining-time estimate.
+export interface InstallProgressDetail {
+  percent: number;
+  stage: InstallStage;
+  downloaded: number | null;
+  total: number | null;
+  etaSecs: number | null;
+  speedBps: number | null;
+}
+
 export interface InstallLog {
   id: string;
   timestamp: string;

@@ -23,7 +23,8 @@ import {
   SystemTool, 
   MirrorConfig, 
   EnvHealthCheck, 
-  SystemStatus 
+  SystemStatus,
+  InstallProgressDetail
 } from './types';
 
 const MainDashboard: React.FC = () => {
@@ -59,6 +60,7 @@ const MainDashboard: React.FC = () => {
     version: string;
     logs: string[];
     progress: number;
+    detail: InstallProgressDetail | null;
     status: 'idle' | 'running' | 'completed' | 'failed';
   }>({
     isOpen: false,
@@ -66,6 +68,7 @@ const MainDashboard: React.FC = () => {
     version: '',
     logs: [],
     progress: 0,
+    detail: null,
     status: 'idle'
   });
 
@@ -232,7 +235,7 @@ const MainDashboard: React.FC = () => {
   const runInstall = async (
     target: { toolId: string; version: string },
     text: { start: string; done: string; failed: string },
-    start: (onLog: (line: string) => void, onProgress: (percent: number) => void) => Promise<boolean>
+    start: (onLog: (line: string) => void, onProgress: (percent: number) => void, onDetail: (detail: InstallProgressDetail) => void) => Promise<boolean>
   ) => {
     if (!isTauri()) {
       toast.info('当前为浏览器预览模式，请在桌面端运行以执行安装');
@@ -247,13 +250,21 @@ const MainDashboard: React.FC = () => {
       ...target,
       logs: [`[init] ${text.start}`],
       progress: 10,
+      detail: null,
       status: 'running'
     });
 
     try {
-      const success = await start(appendInstallLog, (progress) => {
-        setInstallModalState((prev) => ({ ...prev, progress }));
-      });
+      const success = await start(
+        appendInstallLog,
+        (progress) => setInstallModalState((prev) => ({ ...prev, progress })),
+        (detail) =>
+          setInstallModalState((prev) => ({
+            ...prev,
+            detail,
+            progress: Math.max(prev.progress, detail.percent)
+          }))
+      );
       flushInstallLogs();
       setInstallModalState((prev) => ({
         ...prev,
@@ -282,7 +293,7 @@ const MainDashboard: React.FC = () => {
         done: `成功安装 ${toolId} v${version}`,
         failed: `安装 ${toolId} v${version} 失败`
       },
-      (onLog, onProgress) => api.startInstallRuntime(toolId, version, onLog, onProgress)
+      (onLog, onProgress, onDetail) => api.startInstallRuntime(toolId, version, onLog, onProgress, onDetail)
     );
 
   // Handlers for Projects
@@ -347,7 +358,7 @@ const MainDashboard: React.FC = () => {
         done: `成功安装系统工具: ${toolId}`,
         failed: `安装 ${toolId} 失败`
       },
-      (onLog, onProgress) => api.startInstallSystemTool(toolId, onLog, onProgress)
+      (onLog, onProgress, onDetail) => api.startInstallSystemTool(toolId, onLog, onProgress, onDetail)
     );
 
   // Handlers for Mirrors
@@ -548,6 +559,7 @@ const MainDashboard: React.FC = () => {
         version={installModalState.version}
         logs={installModalState.logs}
         progress={installModalState.progress}
+        detail={installModalState.detail}
         status={installModalState.status}
         canSetGlobal={!!runtimes.find(t => t.id === installModalState.toolId)?.managedVersions?.includes(installModalState.version)}
         onClose={() => setInstallModalState((prev) => ({ ...prev, isOpen: false }))}

@@ -109,6 +109,46 @@ where
     }
 }
 
+/// Feed a child pipe to `on_record` splitting on CR *and* LF.
+///
+/// Installers redraw their progress with `\r` (curl/mise/clx) and end real
+/// lines with `\n`; a `\n`-only reader turns a thousand redraws into one
+/// unusable line, while a `\r`-only reader loses ordinary output. Empty
+/// records are dropped so `\r\n` does not emit blank lines.
+pub async fn forward_records<R>(mut pipe: R, mut on_record: impl FnMut(&str))
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+    let mut chunk = vec![0u8; 8192];
+    let mut pending: Vec<u8> = Vec::new();
+    loop {
+        match pipe.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                pending.extend_from_slice(&chunk[..read]);
+                let mut start = 0usize;
+                for index in 0..pending.len() {
+                    if pending[index] == b'\r' || pending[index] == b'\n' {
+                        if index > start {
+                            on_record(&String::from_utf8_lossy(&pending[start..index]));
+                        }
+                        start = index + 1;
+                    }
+                }
+                pending.drain(..start);
+                // A single runaway line must not grow the buffer forever.
+                if pending.len() > 64 * 1024 {
+                    pending.clear();
+                }
+            }
+        }
+    }
+    if !pending.is_empty() {
+        on_record(&String::from_utf8_lossy(&pending));
+    }
+}
+
 pub fn set_active_install_pid(pid: Option<u32>) {
     ACTIVE_INSTALL_PID.store(pid.unwrap_or(0), Ordering::SeqCst);
 }

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { 
+import {
   Terminal, 
   CheckCircle2, 
   AlertCircle, 
@@ -8,9 +8,22 @@ import {
   Loader2,
   Zap,
   ArrowDownCircle,
-  AlertTriangle
+  AlertTriangle,
+  Clock,
+  Gauge
 } from 'lucide-react';
 import { useToast } from './Toast';
+import { InstallProgressDetail, InstallStage } from '../types';
+import { formatBytes, formatEta } from '../utils/format';
+
+const STAGE_LABEL: Record<InstallStage, string> = {
+  prepare: '正在解析版本',
+  download: '正在下载资源包',
+  verify: '正在校验完整性',
+  extract: '正在解压归档',
+  configure: '正在写入 Shims',
+  done: '安装完成'
+};
 
 interface InstallModalProps {
   isOpen: boolean;
@@ -18,6 +31,7 @@ interface InstallModalProps {
   version: string;
   logs: string[];
   progress: number;
+  detail: InstallProgressDetail | null;
   status: 'idle' | 'running' | 'completed' | 'failed';
   onClose: () => void;
   onCancel: () => Promise<void>;
@@ -31,6 +45,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
   version,
   logs,
   progress,
+  detail,
   status,
   onClose,
   onCancel,
@@ -86,11 +101,19 @@ export const InstallModal: React.FC<InstallModalProps> = ({
   const getStageText = () => {
     if (status === 'completed') return '安装完成，环境已就绪';
     if (status === 'failed') return '安装未完成';
+    if (detail) return STAGE_LABEL[detail.stage];
     if (progress < 25) return '正在连接镜像源并解析版本...';
     if (progress < 60) return '正在下载官方资源包...';
     if (progress < 85) return '正在校验完整性与解压...';
     return '正在配置环境变量与 Shims...';
   };
+
+  const downloading = status === 'running' && detail?.stage === 'download';
+  const transferred = downloading ? formatBytes(detail?.downloaded) : null;
+  const totalSize = downloading ? formatBytes(detail?.total) : null;
+  const speed = downloading ? formatBytes(detail?.speedBps) : null;
+  const eta = downloading ? formatEta(detail?.etaSecs ?? null) : null;
+  const showDetail = downloading && (transferred !== null || speed !== null || eta !== null);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-200">
@@ -163,6 +186,30 @@ export const InstallModal: React.FC<InstallModalProps> = ({
               )}
             </div>
           </div>
+
+          {/* Real transfer numbers from the installer's own progress frames. */}
+          {showDetail && (
+            <div className="flex flex-wrap items-center gap-2 pt-0.5">
+              {transferred && (
+                <span className="inline-flex items-center gap-1 font-mono text-[11px] text-slate-300 bg-slate-800/70 border border-slate-700/60 rounded-md px-2 py-0.5">
+                  <ArrowDownCircle className="w-3 h-3 text-cyan-400" />
+                  {totalSize ? `${transferred} / ${totalSize}` : transferred}
+                </span>
+              )}
+              {speed && (
+                <span className="inline-flex items-center gap-1 font-mono text-[11px] text-slate-300 bg-slate-800/70 border border-slate-700/60 rounded-md px-2 py-0.5">
+                  <Gauge className="w-3 h-3 text-emerald-400" />
+                  {speed}/s
+                </span>
+              )}
+              {eta && (
+                <span className="inline-flex items-center gap-1 font-mono text-[11px] text-slate-300 bg-slate-800/70 border border-slate-700/60 rounded-md px-2 py-0.5">
+                  <Clock className="w-3 h-3 text-amber-400" />
+                  {eta}
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Terminal Logs View */}

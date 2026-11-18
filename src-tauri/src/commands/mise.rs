@@ -336,6 +336,218 @@ async fn mise_versions(bin: &str, tool: &str) -> Result<serde_json::Value, Strin
     serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())
 }
 
+/// First Windows path found in a line, e.g. the `py -0p` listing:
+/// ` -V:3.12 *        C:\Users\me\AppData\Local\Programs\Python\Python312\python.exe`
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_path_from_line(line: &str) -> Option<PathBuf> {
+    let chars: Vec<char> = line.chars().collect();
+    for index in 0..chars.len().saturating_sub(2) {
+        let drive = chars[index].is_ascii_alphabetic()
+            && chars[index + 1] == ':'
+            && matches!(chars[index + 2], '\\' | '/');
+        if drive {
+            let path: String = chars[index..].iter().collect();
+            let path = path.trim();
+            return (!path.is_empty()).then(|| PathBuf::from(path));
+        }
+    }
+    None
+}
+
+/// Interpreter paths from `reg query ... /s /v ExecutablePath` output:
+///
+/// ```text
+/// HKEY_CURRENT_USER\SOFTWARE\Python\PythonCore\3.12\InstallPath
+///     ExecutablePath    REG_SZ    C:\Users\me\AppData\Local\Programs\Python\Python312\python.exe
+/// ```
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_python_paths_from_reg(stdout: &str) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed
+            .strip_prefix("ExecutablePath")
+            .or_else(|| trimmed.strip_prefix("(Default)"))
+        else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some((kind, value)) = rest.split_once(char::is_whitespace) else {
+            continue;
+        };
+        if !kind.starts_with("REG_") {
+            continue;
+        }
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if value.to_ascii_lowercase().ends_with(".exe") {
+            found.push(PathBuf::from(value));
+        } else {
+            // The key usually stores the install directory, sometimes with a
+            // trailing separator.
+            let directory = value.trim_end_matches(['\\', '/']);
+            found.push(PathBuf::from(directory).join("python.exe"));
+        }
+    }
+    found
+}
+
+/// Directories that hold an interpreter without being on PATH: python.org's
+/// per-user and per-machine layouts plus the conda family.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_python_install_dirs() -> Vec<PathBuf> {
+    let mut versioned_roots: Vec<PathBuf> = Vec::new();
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        versioned_roots.push(PathBuf::from(local).join("Programs").join("Python"));
+    }
+    for variable in ["ProgramFiles", "ProgramFiles(x86)", "SystemDrive"] {
+        if let Some(root) = std::env::var_os(variable) {
+            versioned_roots.push(PathBuf::from(root));
+        }
+    }
+    let mut found = Vec::new();
+    for root in versioned_roots {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            // `Python312`, `Python313` … but never `Python Launcher`.
+            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+            if name.starts_with("python3")
+                && name["python3".len()..].chars().all(|c| c.is_ascii_digit())
+            {
+                found.push(entry.path());
+            }
+        }
+    }
+    let mut conda_dirs: Vec<PathBuf> = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        for name in ["anaconda3", "miniconda3", "miniforge3", "mambaforge"] {
+            conda_dirs.push(home.join(name));
+        }
+    }
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        for name in ["anaconda3", "miniconda3", "miniforge3", "mambaforge"] {
+            conda_dirs.push(PathBuf::from(&local).join(name));
+        }
+    }
+    if let Some(program_data) = std::env::var_os("ProgramData") {
+        for name in ["anaconda3", "miniconda3", "miniforge3", "mambaforge"] {
+            conda_dirs.push(PathBuf::from(&program_data).join(name));
+        }
+    }
+    found.extend(conda_dirs.into_iter().filter(|path| path.is_dir()));
+    found
+}
+
+/// Interpreters worth asking for a version: launcher, registry, then the
+/// conventional install directories.
+#[cfg(target_os = "windows")]
+async fn windows_python_executables() -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+
+    // The Python Launcher knows every registered install, including the ones
+    // that were never added to PATH.
+    for flag in ["-0p", "--list-paths"] {
+        let Ok(output) = env_helper::output_timeout(
+            env_helper::create_silent_tokio_command("py").args([flag]),
+            4,
+        )
+        .await
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            if let Some(path) = windows_path_from_line(line) {
+                found.push(path);
+            }
+        }
+        if !found.is_empty() {
+            break;
+        }
+    }
+
+    // python.org installers write `ExecutablePath` under PythonCore even when
+    // PATH was left alone; the 32-bit registry view is a separate key.
+    for root in [
+        "HKLM\\SOFTWARE\\Python\\PythonCore",
+        "HKCU\\SOFTWARE\\Python\\PythonCore",
+        "HKLM\\SOFTWARE\\WOW6432Node\\Python\\PythonCore",
+        "HKCU\\SOFTWARE\\WOW6432Node\\Python\\PythonCore",
+    ] {
+        let Ok(output) = env_helper::output_timeout(
+            env_helper::create_silent_tokio_command("reg")
+                .args(["query", root, "/s", "/v", "ExecutablePath"]),
+            5,
+        )
+        .await
+        else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        found.extend(windows_python_paths_from_reg(&String::from_utf8_lossy(
+            &output.stdout,
+        )));
+    }
+
+    for directory in windows_python_install_dirs() {
+        found.push(directory.join("python.exe"));
+    }
+
+    // Only real interpreters: skip the Microsoft Store alias stub and anything
+    // that has been uninstalled but left in the registry.
+    let mut unique: Vec<PathBuf> = Vec::new();
+    for path in found {
+        if !path.is_file() || path.to_string_lossy().contains("WindowsApps") {
+            continue;
+        }
+        let key = path.to_string_lossy().to_ascii_lowercase();
+        if unique
+            .iter()
+            .any(|known| known.to_string_lossy().to_ascii_lowercase() == key)
+        {
+            continue;
+        }
+        unique.push(path);
+    }
+    unique
+}
+
+/// Versions installed by any means (python.org, Store, conda, portable zip)
+/// rather than only the one `python` resolves to on PATH.
+#[cfg(target_os = "windows")]
+async fn windows_python_versions() -> Vec<String> {
+    let mut versions = Vec::new();
+    for path in windows_python_executables().await {
+        let Ok(output) = env_helper::output_timeout(
+            env_helper::create_silent_tokio_command(&path.to_string_lossy()).arg("--version"),
+            4,
+        )
+        .await
+        else {
+            continue;
+        };
+        let text = format!(
+            "{} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        if let Some(version) = parse_version_output("python", &text) {
+            if !versions.contains(&version) {
+                versions.push(version);
+            }
+        }
+    }
+    versions
+}
+
 #[tauri::command]
 pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
     if let Some(cached) = RUNTIMES_CACHE.get("all") {
@@ -389,6 +601,21 @@ pub async fn get_runtimes() -> Result<Vec<RuntimeTool>, String> {
                             active = Some(version);
                         }
                     }
+                }
+            }
+            // `python` on PATH only ever reveals one installation. Windows
+            // keeps the others in the launcher, the registry and the standard
+            // install directories, so ask those too.
+            #[cfg(target_os = "windows")]
+            if meta.id == "python" {
+                for version in windows_python_versions().await {
+                    if installed.contains(&version) {
+                        continue;
+                    }
+                    if active.is_none() {
+                        active = Some(version.clone());
+                    }
+                    installed.push(version);
                 }
             }
             Ok::<_, String>((
@@ -702,26 +929,15 @@ pub async fn install_runtime_version(
 
     let mut cmd = runtime_network_command(&mise_bin.to_string_lossy(), &tool_id);
     cmd.current_dir(mise_working_dir())
-        .args(["install", &target, "--verbose"]);
-    let mut progress = 15;
-    let status = super::system::run_streamed(&app, cmd, move |line| {
-        let lower = line.to_lowercase();
-        if lower.contains("download") || lower.contains("get ") {
-            progress = progress.max(35);
-        } else if lower.contains("200 ok") || lower.contains("downloaded") {
-            progress = progress.max(65);
-        } else if lower.contains("verify") || lower.contains("checksum") {
-            progress = progress.max(78);
-        } else if lower.contains("extract") || lower.contains("install") {
-            progress = progress.max(88);
-        } else if lower.contains("installed") || lower.contains("complete") {
-            progress = 98;
-        } else if progress < 90 {
-            progress += 3;
-        }
-        Some(progress)
-    })
-    .await?;
+        .args(["install", &target])
+        // mise hides its progress UI whenever stderr is a pipe, which is the
+        // only place the byte counts, bar and ETA come from. Forcing the UI on
+        // keeps those frames; `install-progress-detail` then reports them.
+        .env("MISE_FORCE_PROGRESS", "1")
+        .env("MISE_TERM_WIDTH", "100")
+        // `--verbose` switches mise to a log-only report with no numbers.
+        .env("MISE_VERBOSE", "0");
+    let status = super::system::run_streamed(&app, cmd).await?;
     if status.success() {
         let _ = app.emit(
             "install-log",
@@ -885,6 +1101,39 @@ pub async fn open_terminal_for_runtime(tool_id: String, version: String) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_py_launcher_listing() {
+        // `py -0p` on a machine with three interpreters, one of them conda.
+        let listing = " -V:3.13 *        C:\\Users\\me\\AppData\\Local\\Programs\\Python\\Python313\\python.exe\r\n -V:3.11          C:\\Python311\\python.exe\r\n -V:ContinuumAnalytics/Anaconda39-64 C:\\Users\\me\\miniconda3\\python.exe\r\n";
+        let paths: Vec<PathBuf> = listing
+            .lines()
+            .filter_map(windows_path_from_line)
+            .collect();
+        assert_eq!(paths.len(), 3);
+        assert_eq!(
+            paths[0],
+            PathBuf::from("C:\\Users\\me\\AppData\\Local\\Programs\\Python\\Python313\\python.exe")
+        );
+        assert_eq!(paths[2], PathBuf::from("C:\\Users\\me\\miniconda3\\python.exe"));
+        assert_eq!(windows_path_from_line("no path here"), None);
+    }
+
+    #[test]
+    fn parses_python_registry_keys() {
+        // `reg query HKLM\SOFTWARE\Python\PythonCore /s /v ExecutablePath`
+        let stdout = "\r\nHKEY_CURRENT_USER\\SOFTWARE\\Python\\PythonCore\\3.12\\InstallPath\r\n    ExecutablePath    REG_SZ    C:\\Users\\me\\AppData\\Local\\Programs\\Python\\Python312\\python.exe\r\n\r\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Python\\PythonCore\\3.9\\InstallPath\r\n    ExecutablePath    REG_EXPAND_SZ    C:\\Program Files\\Python39\\python.exe\r\n\r\nHKEY_CURRENT_USER\\SOFTWARE\\Python\\PythonCore\\3.8\\InstallPath\r\n    (Default)    REG_SZ    C:\\Python38\\\r\n";
+        let paths = windows_python_paths_from_reg(stdout);
+        assert_eq!(paths.len(), 3);
+        assert_eq!(
+            paths[0],
+            PathBuf::from("C:\\Users\\me\\AppData\\Local\\Programs\\Python\\Python312\\python.exe")
+        );
+        assert_eq!(paths[1], PathBuf::from("C:\\Program Files\\Python39\\python.exe"));
+        // A bare directory gains the executable name.
+        assert_eq!(paths[2], PathBuf::from("C:\\Python38").join("python.exe"));
+        assert!(windows_python_paths_from_reg("no keys").is_empty());
+    }
     #[cfg(unix)]
     #[tokio::test]
     async fn python_empty_or_failed_list_uses_precompiled_index() {
